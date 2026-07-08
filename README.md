@@ -1,14 +1,22 @@
-# 基于 Strix 的 AI 辅助安全分析平台
+# Strix AI 辅助安全分析平台
 
-课程演示型 MVP。
+一个面向真实黑盒扫描场景的 AI 辅助安全分析平台。
 
-目标不是做企业级平台，而是在保持 `原生前端 + Python 最小后端 + 真实 Strix 扫描链路` 不回退的前提下，打通：
+平台以 Strix 为真实扫描引擎，在保持轻量部署的前提下，把 `任务创建 -> 实时扫描 -> 运行态解释 -> 风险展示 -> 报告导出` 串成一个完整工作流。它不是单纯的扫描结果查看器，而是一个更强调“扫描是否收敛到漏洞证据、当前处于哪个阶段、下一步应该怎么做”的产品化工作台。
 
-`任务创建 -> 真实扫描 -> 运行态解释 -> 风险展示 -> Markdown/DOCX 导出`
+## 产品定位
 
-## 1. 当前能力
+Strix AI 辅助安全分析平台聚焦三件事：
 
-- 支持 `fixture` 演示路径
+- 让真实扫描过程可见，而不只是看到最终结果
+- 让漏洞结果可解释，而不只是堆砌日志和原始 findings
+- 让扫描产物可交付，支持直接导出结构化报告
+
+平台当前采用 `原生前端 + Python 最小后端 + Strix CLI` 的轻量架构，适合本地部署、内部演示、授权测试环境验证，以及安全研究工作流的快速搭建。
+
+## 核心能力
+
+- 支持 `fixture` 样例路径，便于快速演示与联调
 - 支持 `latest_real_run` 真实 Strix 扫描路径
 - 支持显式 `run`
 - 支持 `/runtime` 结构化运行态解释
@@ -16,25 +24,76 @@
 - 支持基于固定模板的 DOCX 导出
 - 支持单网站导出与多网站合并导出
 - 支持扫描时长预设：`3 / 5 / 10 分钟`
-- 支持在扫描中提前吸收已落盘 findings
+- 支持运行中提前吸收已落盘 findings
 - 支持在 `failed / timeout / interrupted / cancelled` 后尽量保留已发现漏洞
 - 支持 findings 中文化、LLM 翻译与持久化缓存
 
-## 2. 技术边界
+## 产品价值
+
+### 1. 扫描过程可解释
+
+平台不只展示“成功/失败”，还会解释真实扫描运行到了哪个阶段。
+
+当前已接入的运行态字段：
+
+- `phase_label`
+- `attack_surface`
+- `convergence`
+- `failure_classification`
+- `recommended_next_action`
+- `llm_usage`
+
+阶段模型：
+
+1. `preflight`
+2. `recon`
+3. `surface_analysis`
+4. `targeted_validation`
+5. `evidence_packaging`
+
+### 2. 风险结果更稳定
+
+平台对 findings 中文化采用两层策略：
+
+1. 高频漏洞类型规则表
+2. 复用 Strix 同源 LLM 配置做翻译
+
+同时会把同一真实 run 的翻译结果缓存到：
+
+```text
+strix_runs/<run>/finding_translations.zh-CN.json
+```
+
+这样可以减少重复翻译，避免同一 finding 在多次加载时反复跳版本。
+
+### 3. 结果输出可直接交付
+
+支持两类导出：
+
+- Markdown 报告
+- 基于固定模板的 DOCX 报告
+
+模板文件：
+
+```text
+assets/report_template.docx
+```
+
+DOCX 支持：
+
+- 当前网站单独导出
+- 多网站合并导出
+
+## 技术架构
 
 - 前端：`HTML + CSS + JavaScript`
 - 后端：Python 标准库最小 HTTP 服务
 - 扫描引擎：`Strix CLI`
 - 导出模板：`assets/report_template.docx`
 
-不做的事：
+当前保持轻量架构，不引入数据库、消息队列或重量级前后端框架。
 
-- 不做大范围架构重构
-- 不迁移到 React / Vite / 数据库 / 队列
-- 不回退已有真实 Strix 扫描链路
-- 不回退已有 DOCX 模板导出能力
-
-## 3. 目录说明
+## 目录说明
 
 ```text
 01_新项目/
@@ -48,6 +107,7 @@
     backend/
     frontend/
   tests/
+  strix_runs/
 ```
 
 说明：
@@ -56,9 +116,9 @@
 - `docs/demo/` 包含演示脚本和故障口径
 - `docs/setup/` 包含 Strix、Docker 和 API 配置说明
 
-## 4. 快速启动
+## 快速启动
 
-### 4.1 只看演示页面
+### 1. 仅启动平台页面
 
 只需要：
 
@@ -80,7 +140,7 @@ http://127.0.0.1:8000/
 
 此时可直接使用 `fixture` 路径，不依赖 Docker 和 Strix。
 
-### 4.2 跑真实 Strix 扫描
+### 2. 启用真实 Strix 扫描
 
 额外需要：
 
@@ -119,68 +179,23 @@ C:\Users\<用户名>\.strix\cli-config.json
 
 - [docs/setup/strix_setup.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/setup/strix_setup.md)
 
-## 5. 真实扫描运行态说明
+## 使用方式
 
-平台现在不只展示“有没有结果”，还会解释 Strix 扫描处于哪个阶段。
+推荐顺序：
 
-当前前端已接入：
-
-- `phase_label`
-- `attack_surface`
-- `convergence`
-- `failure_classification`
-- `recommended_next_action`
-- `llm_usage`
-
-阶段模型：
-
-1. `preflight`
-2. `recon`
-3. `surface_analysis`
-4. `targeted_validation`
-5. `evidence_packaging`
-
-如果一次真实扫描没有正常收口，但已经保留了 findings，界面会按“执行完成”展示当前结果，避免把已保留报告误讲成纯失败空跑。
-
-## 6. 中文化策略
-
-当前 findings 中文化分两层：
-
-1. 高频漏洞类型规则表
-2. 复用 Strix 同源 LLM 配置做中文翻译
-
-为避免重复翻译和同一 finding 来回跳版本：
-
-- 会优先走规则表
-- 若启用 LLM 翻译，会把翻译结果持久化缓存到对应 `strix_runs/<run>/finding_translations.zh-CN.json`
-- 同一 run 后续再次读取时直接复用缓存
-
-## 7. 推荐演示顺序
-
-先做稳定演示：
-
-1. 创建 `fixture` 任务
-2. 查看摘要和风险详情
-3. 导出 Markdown
-4. 导出 DOCX
-
-再做真实扫描演示：
-
-1. 创建 `latest_real_run` 任务
-2. 选择目标
-3. 选择时长
+1. 创建任务
+2. 选择 `fixture` 或 `latest_real_run`
+3. 如为真实扫描，选择时长
 4. 点击 `启动真实 Strix 扫描`
-5. 讲解运行态阶段、攻击面、收敛判断和下一步建议
-6. 如有 findings，展示中文风险详情与导出结果
+5. 观察运行态阶段、攻击面、收敛判断和下一步建议
+6. 查看风险详情
+7. 导出 Markdown / DOCX
 
-演示口径：
+如果一次真实扫描没有正常收口，但已经保留了 findings，界面会按“执行完成”展示当前结果，避免把已保留的有效结果误解释为纯失败空跑。
 
-- [docs/demo/demo_script.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/demo/demo_script.md)
-- [docs/demo/failure_playbook.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/demo/failure_playbook.md)
+## 常见问题
 
-## 8. 常见故障
-
-### 8.1 页面能打开，但真实扫描跑不起来
+### 页面能打开，但真实扫描跑不起来
 
 优先检查：
 
@@ -189,22 +204,22 @@ C:\Users\<用户名>\.strix\cli-config.json
 3. `STRIX_LLM / LLM_API_KEY / DEEPSEEK_API_KEY` 是否存在
 4. `~/.strix/cli-config.json` 是否是你自己的配置
 
-### 8.2 `fixture` 能跑，`latest_real_run` 不能跑
+### `fixture` 能跑，`latest_real_run` 不能跑
 
 这通常不是前端问题，而是 Strix 运行环境未就绪。
 
-### 8.3 超时或失败后为什么还有报告
+### 超时或失败后为什么还有报告
 
-这是当前平台的设计目标之一：
+这是平台的设计目标之一：
 
 - 只要运行过程中已经落盘 findings，就尽量保留到当前任务报告
 - 因此“任务失败”和“报告为空”不是一回事
 
-### 8.4 端口 8000 异常
+### 端口 8000 异常
 
-当前环境里 `8000` 可能残留旧进程。验收或录屏时，建议优先用干净端口启动。
+当前环境里 `8000` 可能残留旧进程。验收或录屏时，建议优先使用干净端口启动。
 
-## 9. 测试命令
+## 测试命令
 
 前端：
 
@@ -227,12 +242,12 @@ node scripts/browser_smoke_test.mjs http://127.0.0.1:8000/ fixture
 node scripts/browser_smoke_test.mjs http://127.0.0.1:8000/ latest_real_run
 ```
 
-## 10. 共享与 GitHub 上传
+## 共享与 GitHub 上传
 
 不要提交：
 
-- 你的真实 API Key
-- 你的 `~/.strix/cli-config.json`
+- 真实 API Key
+- `~/.strix/cli-config.json`
 - 本机临时运行产物
 
 仓库内只保留：
@@ -242,29 +257,27 @@ node scripts/browser_smoke_test.mjs http://127.0.0.1:8000/ latest_real_run
 - 代码
 - 测试
 
-已经提供 GitHub 共享副本构建脚本：
+共享副本构建脚本：
 
 ```powershell
 python scripts/build_github_share.py
 ```
 
-默认输出到：
+默认输出目录：
 
 ```text
 dist/github-share/strix-ai-security-demo-platform
 ```
 
-这个共享副本会排除本机验收残留、运行产物和会话规划文件，适合直接初始化 Git 仓库后上传。
-
-## 11. 相关文档
+## 相关文档
 
 - [docs/setup/strix_setup.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/setup/strix_setup.md)
 - [docs/demo/demo_script.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/demo/demo_script.md)
 - [docs/demo/failure_playbook.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/demo/failure_playbook.md)
 - [docs/architecture/strix-convergence-design.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/architecture/strix-convergence-design.md)
 
-## 12. 注意
+## 使用边界
 
-- 仅用于课程演示、授权测试或本地实验
+- 仅用于授权测试、内部演示或本地实验环境
 - 不要扫描未授权目标
-- 当前是本地 MVP，不是生产级部署方案
+- 当前版本适合轻量部署与快速验证，不等同于生产级安全平台
