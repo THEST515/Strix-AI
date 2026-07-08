@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Strix AI 辅助安全分析平台</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-mission-tone="idle">
+    <div class="app-shell">
+      <header class="topbar reveal" style="--delay: 0.04s">
+          <div class="topbar__brand">
+            <span class="topbar__mark">SA</span>
+            <div>
+              <p class="micro-label">Strix 安全演示</p>
+              <strong>安全分析演示平台</strong>
+            </div>
+          </div>
+        <div class="topbar__status">
+          <span class="status-chip">授权测试目标</span>
+          <span class="status-chip status-chip--muted">产品演示环境</span>
+        </div>
+      </header>
+
+      <main class="workspace-grid reveal" style="--delay: 0.18s">
+        <aside class="panel panel--form">
+          <div class="section-heading">
+            <h2>任务创建</h2>
+          </div>
+
+          <form id="task-form" class="task-form">
+            <label>
+              <span>任务名称</span>
+              <input
+                id="task-name"
+                name="taskName"
+                type="text"
+                placeholder="例如：授权实验站点登录链路验证"
+                required
+              />
+            </label>
+
+            <label>
+              <span>目标地址</span>
+              <input
+                id="task-target"
+                name="target"
+                type="text"
+                placeholder="例如：https://authorized-lab.example"
+                required
+              />
+            </label>
+
+            <div class="task-form__row">
+              <label>
+                <span>扫描模式</span>
+                <select id="task-mode" name="scanMode">
+                  <option value="quick">快速</option>
+                  <option value="standard">标准</option>
+                  <option value="deep">深度</option>
+                </select>
+              </label>
+
+              <label>
+                <span>结果来源</span>
+                <select id="task-result-source" name="resultSource">
+                  <option value="fixture">演示样例</option>
+                  <option value="latest_real_run">真实 Strix 扫描</option>
+                </select>
+              </label>
+            </div>
+
+            <label>
+              <span>扫描时长</span>
+              <select id="task-timeout" name="scanTimeoutSeconds">
+                <option value="180">3 分钟</option>
+                <option value="300" selected>5 分钟</option>
+                <option value="600">10 分钟</option>
+              </select>
+            </label>
+
+            <label>
+              <span>任务说明</span>
+              <textarea
+                id="task-instruction"
+                name="instruction"
+                rows="5"
+                placeholder="例如：仅验证登录后资料读取与对象访问控制，不执行破坏性操作。"
+              ></textarea>
+            </label>
+
+            <div class="form-actions">
+              <button class="button button--primary" type="submit">创建并载入任务</button>
+              <p id="form-feedback" class="form-feedback" aria-live="polite"></p>
+            </div>
+          </form>
+        </aside>
+
+        <section class="panel panel--overview">
+          <div class="section-heading section-heading--tight">
+            <h2>结果总览</h2>
+          </div>
+
+          <div class="result-meta">
+            <div class="result-meta__item">
+              <span class="micro-label">当前任务</span>
+              <strong id="report-task-name">尚未创建任务</strong>
+            </div>
+            <div class="result-meta__item">
+              <span class="micro-label">目标地址</span>
+              <strong id="report-target">-</strong>
+            </div>
+            <div class="result-meta__item">
+              <span class="micro-label">结果来源</span>
+              <strong id="report-source">演示样例</strong>
+            </div>
+            <div class="result-meta__actions">
+              <select id="export-kind" class="export-kind">
+                <option value="markdown-current">Markdown 报告</option>
+                <option value="docx-current">DOCX 报告（当前网站）</option>
+                <option value="docx-all">DOCX 报告（全部网站合并）</option>
+              </select>
+              <button id="run-task" class="button button--secondary" type="button" disabled>
+                显式运行任务
+              </button>
+              <button id="cancel-task" class="button button--ghost" type="button" disabled>
+                终止任务
+              </button>
+              <button id="export-report" class="button button--ghost" type="button" disabled>
+                导出报告
+              </button>
+            </div>
+          </div>
+
+          <div id="summary-strip" class="summary-strip"></div>
+
+          <article class="result-summary">
+            <div class="result-summary__header">
+              <div>
+                <h3>分析摘要</h3>
+              </div>
+            </div>
+            <div id="ai-summary"></div>
+          </article>
+
+          <article class="runtime-monitor">
+            <div class="runtime-monitor__header">
+              <div>
+                <h3>执行轨迹</h3>
+              </div>
+              <span id="runtime-status" class="runtime-status">等待真实扫描</span>
+            </div>
+            <div id="runtime-empty-state" class="runtime-empty-state">
+              当前没有可展示的结构化运行态信息。
+            </div>
+            <div id="runtime-workbench" class="runtime-workbench" hidden></div>
+            <pre id="runtime-log" class="runtime-log">当前没有可展示的 Strix 运行日志。</pre>
+          </article>
+        </section>
+
+        <aside class="panel panel--history">
+          <div class="section-heading section-heading--tight">
+            <h2>任务记录</h2>
+          </div>
+
+          <div id="task-list" class="task-list"></div>
+        </aside>
+      </main>
+
+      <section class="detail-stage reveal" style="--delay: 0.26s">
+        <div class="detail-stage__header">
+          <div class="section-heading">
+            <h2>风险详情</h2>
+          </div>
+        </div>
+        <div id="findings-list" class="findings-list"></div>
+      </section>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

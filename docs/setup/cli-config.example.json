@@ -1,0 +1,7 @@
+{
+  "env": {
+    "STRIX_LLM": "deepseek/deepseek-v4-flash",
+    "LLM_API_KEY": "replace-with-your-own-key",
+    "DEEPSEEK_API_KEY": "replace-with-your-own-key"
+  }
+}

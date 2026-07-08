@@ -1,0 +1,22 @@
+export const fixtureReport = {
+  taskId: "fixture-task-001",
+  target: "https://authorized-lab.example",
+  findings: [
+    {
+      findingId: "finding-001",
+      title: "个人资料接口存在越权访问",
+      severity: "high",
+      summary: "资料查询接口缺少有效归属校验，可跨账号读取用户信息。",
+      evidence: "将请求中的数字编号替换为其他用户标识后，接口返回了对应资料内容。",
+      remediation: "在每次资料读取时执行服务端归属校验，拒绝访问不属于当前会话的资源。",
+    },
+    {
+      findingId: "finding-002",
+      title: "错误信息泄露内部细节",
+      severity: "medium",
+      summary: "未处理异常会把堆栈和调试信息直接暴露给前端页面。",
+      evidence: "应用在 500 响应中返回了调试堆栈和内部报错细节。",
+      remediation: "生产环境返回脱敏后的统一错误信息，并关闭调试输出与堆栈回显。",
+    },
+  ],
+};
