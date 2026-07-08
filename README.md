@@ -116,7 +116,149 @@ DOCX 支持：
 - `docs/demo/` 包含演示脚本和故障口径
 - `docs/setup/` 包含 Strix、Docker 和 API 配置说明
 
-## 快速启动
+## Docker 与 Strix 部署配置
+
+真实扫描依赖 4 个前提：
+
+- Docker Desktop 已安装并成功启动
+- Strix CLI 已安装并加入 PATH
+- 当前电脑已配置可用的 LLM API
+- 扫描目标已获得授权
+
+### 1. 部署 Docker Desktop
+
+先安装 Docker Desktop，并完成首次初始化。安装完成后启动 Docker Desktop，等待其进入运行状态。
+
+验证命令：
+
+```powershell
+docker --version
+docker info
+```
+
+判断标准：
+
+- `docker --version` 成功，说明 Docker CLI 已安装
+- `docker info` 成功，说明 Docker daemon 已就绪
+
+如果 `docker info` 失败，`latest_real_run` 通常无法工作。
+
+### 2. 部署 Strix CLI
+
+确保 `strix` 已安装并加入系统 PATH。Windows 常见可执行文件路径类似：
+
+```text
+C:\Users\<用户名>\.strix\bin\strix.exe
+```
+
+验证命令：
+
+```powershell
+where strix
+strix --help
+```
+
+判断标准：
+
+- `where strix` 能找到可执行文件
+- `strix --help` 能正常输出帮助信息
+
+如果找不到 `strix`，需要把 `strix.exe` 所在目录加入 PATH 后重新打开终端。
+
+### 3. 配置 Strix 所需 LLM API
+
+这个项目支持两种方式：
+
+1. 环境变量
+2. Strix 本地配置文件
+
+推荐原则：
+
+- 项目仓库不保存任何真实 Key
+- 每个使用者在自己电脑上配置自己的 Key
+- 不共享你自己的本机 Key 文件
+
+环境变量示例：
+
+```powershell
+$env:STRIX_LLM="deepseek/deepseek-v4-flash"
+$env:LLM_API_KEY="你的 DeepSeek Key"
+$env:DEEPSEEK_API_KEY="你的 DeepSeek Key"
+```
+
+如果希望写入用户级环境变量：
+
+```powershell
+setx STRIX_LLM "deepseek/deepseek-v4-flash"
+setx LLM_API_KEY "你的 DeepSeek Key"
+setx DEEPSEEK_API_KEY "你的 DeepSeek Key"
+```
+
+注意：
+
+- `setx` 后要重新打开终端
+- 不要把真实 Key 写进仓库、脚本或共享文档
+
+也可以使用 Strix 本地配置文件：
+
+```text
+C:\Users\<用户名>\.strix\cli-config.json
+```
+
+配置模板示例：
+
+```json
+{
+  "env": {
+    "STRIX_LLM": "deepseek/deepseek-v4-flash",
+    "LLM_API_KEY": "在这里填你自己的 Key",
+    "DEEPSEEK_API_KEY": "在这里填你自己的 Key"
+  }
+}
+```
+
+仓库内提供了可共享模板：
+
+- [docs/setup/cli-config.example.json](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/setup/cli-config.example.json)
+
+详细说明见：
+
+- [docs/setup/strix_setup.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/setup/strix_setup.md)
+
+### 4. 最小自检流程
+
+进入项目目录：
+
+```powershell
+cd C:\Users\MMK20041021\Desktop\workspace\01_新项目
+```
+
+按顺序执行：
+
+```powershell
+docker info
+strix --help
+```
+
+然后确认以下至少满足一类：
+
+- 已设置 `STRIX_LLM`
+- 已设置 `LLM_API_KEY` 或 `DEEPSEEK_API_KEY`
+- 已创建 `C:\Users\<用户名>\.strix\cli-config.json`
+
+如果要做最小 Strix 启动验证，可以执行：
+
+```powershell
+strix -n --target ./src/frontend
+```
+
+期望结果：
+
+- 命令能够启动
+- 不会立即因为缺少 Docker 或 Key 退出
+- 项目目录下会生成或更新 `strix_runs/`
+
+## 项目启动全过程
 
 ### 1. 仅启动平台页面
 
@@ -142,42 +284,17 @@ http://127.0.0.1:8000/
 
 ### 2. 启用真实 Strix 扫描
 
-额外需要：
+当 Docker、Strix CLI 和 API 配置都已完成后，再使用 `latest_real_run` 路径进行真实扫描。
 
-- Docker Desktop
-- Strix CLI
-- 可用的模型配置
-
-基础检查：
+推荐先检查：
 
 ```powershell
-docker --version
 docker info
 where strix
 strix --help
 ```
 
-环境变量示例：
-
-```powershell
-$env:STRIX_LLM="deepseek/deepseek-v4-flash"
-$env:LLM_API_KEY="你的 Key"
-$env:DEEPSEEK_API_KEY="你的 Key"
-```
-
-也可以使用本机 Strix 配置文件：
-
-```text
-C:\Users\<用户名>\.strix\cli-config.json
-```
-
-可共享模板：
-
-- [docs/setup/cli-config.example.json](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/setup/cli-config.example.json)
-
-详细配置：
-
-- [docs/setup/strix_setup.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/setup/strix_setup.md)
+如果这些检查都通过，再启动平台并在页面里选择真实扫描任务。
 
 ## 使用方式
 
@@ -240,33 +357,6 @@ python -m unittest discover -s tests/backend
 ```powershell
 node scripts/browser_smoke_test.mjs http://127.0.0.1:8000/ fixture
 node scripts/browser_smoke_test.mjs http://127.0.0.1:8000/ latest_real_run
-```
-
-## 共享与 GitHub 上传
-
-不要提交：
-
-- 真实 API Key
-- `~/.strix/cli-config.json`
-- 本机临时运行产物
-
-仓库内只保留：
-
-- 说明文档
-- 示例配置模板
-- 代码
-- 测试
-
-共享副本构建脚本：
-
-```powershell
-python scripts/build_github_share.py
-```
-
-默认输出目录：
-
-```text
-dist/github-share/strix-ai-security-demo-platform
 ```
 
 ## 相关文档
