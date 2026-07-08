@@ -148,7 +148,7 @@ docker info
 确保 `strix` 已安装并加入系统 PATH。Windows 常见可执行文件路径类似：
 
 ```text
-C:\Users\<用户名>\.strix\bin\strix.exe
+%USERPROFILE%\.strix\bin\strix.exe
 ```
 
 验证命令：
@@ -202,7 +202,7 @@ setx DEEPSEEK_API_KEY "你的 DeepSeek Key"
 也可以使用 Strix 本地配置文件：
 
 ```text
-C:\Users\<用户名>\.strix\cli-config.json
+%USERPROFILE%\.strix\cli-config.json
 ```
 
 配置模板示例：
@@ -219,18 +219,18 @@ C:\Users\<用户名>\.strix\cli-config.json
 
 仓库内提供了可共享模板：
 
-- [docs/setup/cli-config.example.json](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/setup/cli-config.example.json)
+- [docs/setup/cli-config.example.json](./docs/setup/cli-config.example.json)
 
 详细说明见：
 
-- [docs/setup/strix_setup.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/setup/strix_setup.md)
+- [docs/setup/strix_setup.md](./docs/setup/strix_setup.md)
 
 ### 4. 最小自检流程
 
 进入项目目录：
 
 ```powershell
-cd C:\Users\MMK20041021\Desktop\workspace\01_新项目
+cd <repo-root>
 ```
 
 按顺序执行：
@@ -244,7 +244,7 @@ strix --help
 
 - 已设置 `STRIX_LLM`
 - 已设置 `LLM_API_KEY` 或 `DEEPSEEK_API_KEY`
-- 已创建 `C:\Users\<用户名>\.strix\cli-config.json`
+- 已创建 `%USERPROFILE%\.strix\cli-config.json`
 
 如果要做最小 Strix 启动验证，可以执行：
 
@@ -270,7 +270,7 @@ strix -n --target ./src/frontend
 启动：
 
 ```powershell
-cd C:\Users\MMK20041021\Desktop\workspace\01_新项目
+cd <repo-root>
 python scripts/run_demo_server.py
 ```
 
@@ -361,10 +361,10 @@ node scripts/browser_smoke_test.mjs http://127.0.0.1:8000/ latest_real_run
 
 ## 相关文档
 
-- [docs/setup/strix_setup.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/setup/strix_setup.md)
-- [docs/demo/demo_script.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/demo/demo_script.md)
-- [docs/demo/failure_playbook.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/demo/failure_playbook.md)
-- [docs/architecture/strix-convergence-design.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/docs/architecture/strix-convergence-design.md)
+- [docs/setup/strix_setup.md](./docs/setup/strix_setup.md)
+- [docs/demo/demo_script.md](./docs/demo/demo_script.md)
+- [docs/demo/failure_playbook.md](./docs/demo/failure_playbook.md)
+- [docs/architecture/strix-convergence-design.md](./docs/architecture/strix-convergence-design.md)
 
 ## 使用边界
 
