@@ -50,6 +50,37 @@ export function escapeHTML(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => htmlEscapeMap[character]);
 }
 
+export function renderPreflightMarkup(preflight) {
+  if (preflight?.state === "loading") {
+    return '<p class="preflight-status__message">正在检查真实扫描环境...</p>';
+  }
+
+  if (preflight?.state === "unavailable") {
+    return '<p class="preflight-status__message">运行前检查暂不可用，启动时仍会由后端复检。</p>';
+  }
+
+  if (!preflight?.result) {
+    return '<p class="preflight-status__message">填写目标后将自动检查真实扫描环境。</p>';
+  }
+
+  const summary = preflight.result.ready ? "真实扫描环境已就绪" : "真实扫描环境未就绪";
+  const checks = (preflight.result.checks ?? [])
+    .map(
+      (check) => `
+        <li class="preflight-status__check preflight-status__check--${escapeHTML(check.status)}">
+          <strong>${escapeHTML(check.label)}</strong>
+          <span>${escapeHTML(check.detail)}</span>
+        </li>
+      `,
+    )
+    .join("");
+
+  return `
+    <p class="preflight-status__message">${summary}</p>
+    <ul class="preflight-status__checks">${checks}</ul>
+  `;
+}
+
 export function summarizeFindings(findings, severityOrder = defaultSeverityOrder) {
   const counts = severityOrder.reduce((accumulator, severity) => {
     accumulator[severity] = 0;

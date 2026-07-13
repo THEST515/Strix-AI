@@ -1,0 +1,10 @@
+[
+  {
+    "id": "vuln-0001",
+    "title": "Reflected Cross-Site Scripting in search parameter",
+    "severity": "medium",
+    "description": "The q parameter is reflected in the response without context-aware encoding.",
+    "technical_analysis": "A crafted q value is returned in the HTML response and can execute in a browser context.",
+    "remediation_steps": "Apply context-aware output encoding and validate untrusted input."
+  }
+]

@@ -1,0 +1,17 @@
+{
+  "run_id": "01_62fb",
+  "status": "completed",
+  "scan_mode": "quick",
+  "start_time": "2026-07-06T02:36:47+00:00",
+  "end_time": "2026-07-06T02:43:59+00:00",
+  "targets_info": [
+    {
+      "original": "https://authorized-lab.example"
+    }
+  ],
+  "scan_results": {
+    "executive_summary": "Overall Risk Level: Medium.\nOne finding requires remediation.",
+    "technical_analysis": "The authorized fixture contains one reflected input handling issue.",
+    "recommendations": "Apply context-aware output encoding and add regression coverage."
+  }
+}

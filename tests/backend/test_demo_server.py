@@ -18,7 +18,42 @@ from src.backend.domain.models import TaskStatus
 from src.backend.api.demo_server import DemoTaskService, create_demo_server
 
 
+def ready_preflight(target: str) -> dict[str, object]:
+    return {"ready": True, "checks": []}
+
+
 class DemoTaskServiceTests(unittest.TestCase):
+    def test_run_task_does_not_start_real_scan_when_preflight_fails(self) -> None:
+        started: list[object] = []
+        service = DemoTaskService(
+            fixture_path=ROOT / "tests" / "fixtures" / "strix_findings_sample.json",
+            strix_runs_root=ROOT / "strix_runs",
+            strix_scan_starter=lambda task: started.append(task),
+            preflight_runner=lambda target: {
+                "ready": False,
+                "checks": [
+                    {
+                        "key": "docker",
+                        "label": "Docker",
+                        "status": "failed",
+                        "detail": "Docker daemon 未就绪",
+                    }
+                ],
+            },
+        )
+        created = service.create_task(
+            {
+                "name": "blocked real scan",
+                "target": "http://localhost:8888",
+                "resultSource": "latest_real_run",
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "Docker daemon 未就绪"):
+            service.run_task(created["task"]["task_id"])
+
+        self.assertEqual(started, [])
+
     def test_create_task_loads_fixture_report_and_marks_demo_status(self) -> None:
         service = DemoTaskService(
             fixture_path=ROOT / "tests" / "fixtures" / "strix_findings_sample.json"
@@ -59,7 +94,6 @@ class DemoTaskServiceTests(unittest.TestCase):
     def test_create_task_for_latest_real_run_preserves_requested_target_until_run(self) -> None:
         with TemporaryDirectory() as temp_dir:
             runs_root = Path(temp_dir)
-            shutil.copytree(ROOT / "strix_runs" / "01_62fb", runs_root / "01_62fb")
             service = DemoTaskService(
                 fixture_path=ROOT / "tests" / "fixtures" / "strix_findings_sample.json",
                 strix_runs_root=runs_root,
@@ -253,6 +287,7 @@ class DemoTaskServiceTests(unittest.TestCase):
                 strix_runs_root=runs_root,
                 strix_scan_starter=fake_start,
                 strix_scan_waiter=fake_wait,
+                preflight_runner=ready_preflight,
             )
             created = service.create_task(
                 {
@@ -453,6 +488,7 @@ class DemoTaskServiceTests(unittest.TestCase):
                 strix_runs_root=runs_root,
                 strix_scan_starter=fake_start,
                 strix_scan_waiter=fake_wait,
+                preflight_runner=ready_preflight,
                 real_scan_timeout_seconds=1,
             )
             created = service.create_task(
@@ -515,6 +551,7 @@ class DemoTaskServiceTests(unittest.TestCase):
                 strix_runs_root=runs_root,
                 strix_scan_starter=fake_start,
                 strix_scan_waiter=fake_wait,
+                preflight_runner=ready_preflight,
             )
             created = service.create_task(
                 {
@@ -560,6 +597,7 @@ class DemoTaskServiceTests(unittest.TestCase):
                 strix_runs_root=runs_root,
                 strix_scan_starter=lambda task: {"task_id": task.task_id},
                 strix_scan_waiter=lambda handle, timeout_seconds=None: None,
+                preflight_runner=ready_preflight,
             )
             created = service.create_task(
                 {
@@ -610,6 +648,7 @@ class DemoTaskServiceTests(unittest.TestCase):
                 strix_scan_waiter=lambda handle, timeout_seconds=None: (_ for _ in ()).throw(
                     ValueError("Strix scan failed: docker")
                 ),
+                preflight_runner=ready_preflight,
             )
             created = service.create_task(
                 {
@@ -719,6 +758,7 @@ class DemoTaskServiceTests(unittest.TestCase):
             strix_runs_root=ROOT / "strix_runs",
             strix_scan_starter=lambda task: {"task_id": task.task_id},
             strix_scan_waiter=lambda handle, timeout_seconds=None: time.sleep(0.2),
+            preflight_runner=ready_preflight,
         )
         created = service.create_task(
             {
@@ -733,6 +773,15 @@ class DemoTaskServiceTests(unittest.TestCase):
 
         self.assertEqual(runtime["runtime"]["phase"], "running")
         self.assertEqual(runtime["runtime"]["run_status"], TaskStatus.RUNNING.value)
+
+        for _ in range(20):
+            results = service.get_task_results(created["task"]["task_id"])
+            if results["task"]["status"] == TaskStatus.FAILED.value:
+                break
+            time.sleep(0.05)
+
+        self.assertEqual(results["task"]["status"], TaskStatus.FAILED.value)
+        self.assertIn("执行失败", results["summary"]["executive_summary"])
 
     def test_run_task_starts_real_scan_in_background_and_returns_running_status_immediately(self) -> None:
         started = threading.Event()
@@ -750,6 +799,7 @@ class DemoTaskServiceTests(unittest.TestCase):
             strix_runs_root=ROOT / "strix_runs",
             strix_scan_starter=fake_start,
             strix_scan_waiter=fake_wait,
+            preflight_runner=ready_preflight,
         )
         created = service.create_task(
             {
@@ -788,6 +838,7 @@ class DemoTaskServiceTests(unittest.TestCase):
             strix_scan_starter=fake_start,
             strix_scan_waiter=fake_wait,
             strix_scan_canceller=fake_cancel,
+            preflight_runner=ready_preflight,
         )
         created = service.create_task(
             {
@@ -818,6 +869,7 @@ class DemoTaskServiceTests(unittest.TestCase):
             strix_runs_root=ROOT / "strix_runs",
             strix_scan_starter=fake_start,
             strix_scan_waiter=fake_wait,
+            preflight_runner=ready_preflight,
             real_scan_timeout_seconds=1,
         )
         created = service.create_task(
@@ -924,6 +976,30 @@ class DemoServerApiTests(unittest.TestCase):
 
         self.assertIn("Strix AI 辅助安全分析平台", html)
 
+    def test_get_preflight_over_http(self) -> None:
+        server = create_demo_server(
+            host="127.0.0.1",
+            port=0,
+            frontend_dir=ROOT / "src" / "frontend",
+            fixture_path=ROOT / "tests" / "fixtures" / "strix_findings_sample.json",
+            strix_runs_root=ROOT / "strix_runs",
+            preflight_runner=lambda target: {"ready": True, "checks": []},
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+
+        try:
+            with urlopen(f"{base_url}/api/preflight?target=http%3A%2F%2Flocalhost%3A8888") as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["checks"], [])
+
     def test_static_module_assets_use_javascript_mime_type(self) -> None:
         with urlopen(f"{self.base_url}/rendering.mjs") as response:
             rendering_content_type = response.headers.get_content_type()
@@ -976,7 +1052,6 @@ class DemoServerApiTests(unittest.TestCase):
     def test_create_latest_real_run_task_over_http(self) -> None:
         with TemporaryDirectory() as temp_dir:
             runs_root = Path(temp_dir)
-            shutil.copytree(ROOT / "strix_runs" / "01_62fb", runs_root / "01_62fb")
             server = create_demo_server(
                 host="127.0.0.1",
                 port=0,
@@ -1108,6 +1183,7 @@ class DemoServerApiTests(unittest.TestCase):
             strix_scan_starter=fake_start,
             strix_scan_waiter=fake_wait,
             strix_scan_canceller=fake_cancel,
+            preflight_runner=ready_preflight,
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()

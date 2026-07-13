@@ -1,5 +1,6 @@
 import {
   renderFindingsMarkup,
+  renderPreflightMarkup,
   renderRuntimeWorkbenchMarkup,
   renderSummaryMarkup,
   renderTaskListMarkup,
@@ -23,10 +24,15 @@ const state = {
   isRunPending: false,
   runtime: null,
   runtimePollHandle: null,
+  preflight: { state: "idle", target: null, result: null },
+  preflightRequestId: 0,
 };
 
 const elements = {
   form: document.querySelector("#task-form"),
+  targetInput: document.querySelector("#task-target"),
+  resultSource: document.querySelector("#task-result-source"),
+  preflightStatus: document.querySelector("#preflight-status"),
   feedback: document.querySelector("#form-feedback"),
   taskList: document.querySelector("#task-list"),
   summaryStrip: document.querySelector("#summary-strip"),
@@ -136,6 +142,77 @@ async function cancelTaskViaApi(task) {
 
 async function loadTaskRuntimeViaApi(task) {
   return requestJson(`/tasks/${task.taskId}/runtime`);
+}
+
+async function refreshPreflight(target, resultSource = elements.resultSource?.value) {
+  if (resultSource !== "latest_real_run") {
+    state.preflight = { state: "idle", target: null, result: null };
+    renderPreflightStatus();
+    return;
+  }
+
+  const normalizedTarget = String(target ?? "").trim();
+  if (!normalizedTarget) {
+    state.preflight = { state: "idle", target: null, result: null };
+    renderPreflightStatus();
+    return;
+  }
+
+  const requestId = state.preflightRequestId + 1;
+  state.preflightRequestId = requestId;
+  state.preflight = { state: "loading", target: normalizedTarget, result: null };
+  renderPreflightStatus();
+
+  if (!apiBaseUrl) {
+    state.preflight = { state: "unavailable", target: normalizedTarget, result: null };
+    renderPreflightStatus();
+    return;
+  }
+
+  try {
+    const result = await requestJson(`/preflight?target=${encodeURIComponent(normalizedTarget)}`);
+    if (requestId !== state.preflightRequestId) {
+      return;
+    }
+    state.preflight = { state: result.ready ? "ready" : "failed", target: normalizedTarget, result };
+  } catch (error) {
+    if (requestId !== state.preflightRequestId) {
+      return;
+    }
+    state.preflight = { state: "unavailable", target: normalizedTarget, result: null };
+  }
+
+  renderPreflightStatus();
+}
+
+function renderPreflightStatus() {
+  if (!elements.preflightStatus) {
+    return;
+  }
+
+  const activeTask = state.tasks.find((task) => task.taskId === state.activeTaskId);
+  const isRealSource = elements.resultSource?.value === "latest_real_run"
+    || activeTask?.resultSource === "latest_real_run";
+  elements.preflightStatus.hidden = !isRealSource;
+  if (!isRealSource) {
+    elements.preflightStatus.innerHTML = "";
+    return;
+  }
+
+  elements.preflightStatus.innerHTML = renderPreflightMarkup(state.preflight);
+  if (activeTask) {
+    renderReport(activeTask);
+  }
+}
+
+function syncPreflightForTask(task) {
+  if (!task || task.resultSource !== "latest_real_run") {
+    return;
+  }
+  if (state.preflight.target === task.target && state.preflight.state !== "idle") {
+    return;
+  }
+  void refreshPreflight(task.target, "latest_real_run");
 }
 
 function triggerTextDownload(fileName, content) {
@@ -586,7 +663,10 @@ function renderReport(task) {
   elements.reportTarget.textContent = task.target;
   elements.reportSource.textContent = sourceLabelForTask(task);
   elements.runButton.textContent = runActionLabelForTask(task);
-  elements.runButton.disabled = state.isRunPending || task.status === "running";
+  const preflightReady = task.resultSource !== "latest_real_run"
+    || (state.preflight.target === task.target && state.preflight.state === "ready");
+  elements.runButton.disabled = state.isRunPending || task.status === "running" || !preflightReady;
+  elements.runButton.title = preflightReady ? "" : "请先通过真实扫描运行前检查";
   elements.cancelButton.disabled = !(task.resultSource === "latest_real_run" && task.status === "running");
   elements.exportButton.disabled = false;
   elements.findingsList.innerHTML = renderFindingsMarkup(task);
@@ -595,6 +675,7 @@ function renderReport(task) {
 
 function renderAll() {
   const activeTask = state.tasks.find((task) => task.taskId === state.activeTaskId) ?? null;
+  syncPreflightForTask(activeTask);
   renderTaskList();
   renderSummary(activeTask);
   renderReport(activeTask);
@@ -628,6 +709,14 @@ elements.form.addEventListener("submit", async (event) => {
   }
 });
 
+elements.resultSource.addEventListener("change", () => {
+  void refreshPreflight(elements.targetInput.value);
+});
+
+elements.targetInput.addEventListener("blur", () => {
+  void refreshPreflight(elements.targetInput.value);
+});
+
 elements.runButton.addEventListener("click", async () => {
   const activeTask = state.tasks.find((task) => task.taskId === state.activeTaskId);
   if (!activeTask) {
@@ -642,6 +731,14 @@ elements.runButton.addEventListener("click", async () => {
 
   if (state.isRunPending) {
     elements.feedback.textContent = "当前已有真实扫描在执行，请等待完成后再试。";
+    return;
+  }
+
+  if (
+    activeTask.resultSource === "latest_real_run"
+    && !(state.preflight.target === activeTask.target && state.preflight.state === "ready")
+  ) {
+    elements.feedback.textContent = "真实扫描环境尚未通过运行前检查。";
     return;
   }
 

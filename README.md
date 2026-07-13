@@ -24,6 +24,7 @@ Strix AI 辅助安全分析平台聚焦三件事：
 - 支持基于固定模板的 DOCX 导出
 - 支持单网站导出与多网站合并导出
 - 支持扫描时长预设：`3 / 5 / 10 分钟`
+- 支持真实扫描运行前检查：目标格式、Docker、Strix CLI 与 LLM 配置
 - 支持运行中提前吸收已落盘 findings
 - 支持在 `failed / timeout / interrupted / cancelled` 后尽量保留已发现漏洞
 - 支持 findings 中文化、LLM 翻译与持久化缓存
@@ -303,7 +304,7 @@ strix --help
 1. 创建任务
 2. 选择 `fixture` 或 `latest_real_run`
 3. 如为真实扫描，选择时长
-4. 点击 `启动真实 Strix 扫描`
+4. 确认运行前检查通过后，点击 `启动真实 Strix 扫描`
 5. 观察运行态阶段、攻击面、收敛判断和下一步建议
 6. 查看风险详情
 7. 导出 Markdown / DOCX
@@ -324,6 +325,8 @@ strix --help
 ### `fixture` 能跑，`latest_real_run` 不能跑
 
 这通常不是前端问题，而是 Strix 运行环境未就绪。
+
+平台会在创建真实扫描任务时显示 Docker、Strix CLI、LLM 配置和目标格式的检查结果，并在真正启动前再次复检。检查不通过时不会创建 Strix 扫描进程。
 
 ### 超时或失败后为什么还有报告
 

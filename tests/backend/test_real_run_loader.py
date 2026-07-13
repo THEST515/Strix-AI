@@ -18,7 +18,7 @@ class RealRunLoaderTests(unittest.TestCase):
     def test_loads_latest_real_run_report_from_strix_runs(self) -> None:
         with TemporaryDirectory() as temp_dir:
             runs_root = Path(temp_dir)
-            shutil.copytree(ROOT / "strix_runs" / "01_62fb", runs_root / "01_62fb")
+            shutil.copytree(ROOT / "tests" / "fixtures" / "real_run_sample", runs_root / "01_62fb")
 
             result = load_latest_real_run_report(runs_root)
 
@@ -28,7 +28,7 @@ class RealRunLoaderTests(unittest.TestCase):
         self.assertEqual(result["report"]["severity_counts"]["medium"], 1)
         self.assertEqual(result["report"]["findings"][0]["finding_id"], "vuln-0001")
         self.assertIn("执行摘要", result["summary"]["executive_summary"])
-        self.assertIn("DOM 型跨站脚本漏洞", result["summary"]["executive_summary"])
+        self.assertIn("总体风险等级：中", result["summary"]["executive_summary"])
 
     def test_loads_completed_run_without_vulnerabilities_file_as_empty_findings(self) -> None:
         with TemporaryDirectory() as temp_dir:

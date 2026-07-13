@@ -400,6 +400,47 @@ body[data-mission-tone="live"] {
   resize: vertical;
 }
 
+.preflight-status {
+  min-height: 88px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.preflight-status__message {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.preflight-status__checks {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.preflight-status__check {
+  display: grid;
+  grid-template-columns: minmax(76px, auto) 1fr;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.preflight-status__check--passed strong {
+  color: #8ed6b0;
+}
+
+.preflight-status__check--failed strong {
+  color: #ffaaa5;
+}
+
 .form-actions {
   display: grid;
   gap: 12px;

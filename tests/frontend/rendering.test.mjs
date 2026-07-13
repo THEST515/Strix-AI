@@ -7,6 +7,7 @@ import {
   renderTaskListMarkup,
   renderSummaryMarkup,
   renderFindingsMarkup,
+  renderPreflightMarkup,
   renderRuntimeWorkbenchMarkup,
 } from "../../src/frontend/rendering.mjs";
 
@@ -68,6 +69,12 @@ test("index.html exposes scan timeout presets for real scans", () => {
   assert.match(html, /10 分钟/);
 });
 
+test("index.html exposes the real scan preflight area", () => {
+  const html = readFileSync(new URL("../../src/frontend/index.html", import.meta.url), "utf8");
+
+  assert.match(html, /id="preflight-status"/);
+});
+
 test("styles.css uses the restrained product-dark palette for the final polish", () => {
   const css = readFileSync(new URL("../../src/frontend/styles.css", import.meta.url), "utf8");
 
@@ -82,6 +89,19 @@ test("escapeHTML escapes dangerous HTML characters", () => {
     escapeHTML(`<img src="x" onerror="alert('xss')">&"'`),
     "&lt;img src=&quot;x&quot; onerror=&quot;alert(&#39;xss&#39;)&quot;&gt;&amp;&quot;&#39;",
   );
+});
+
+test("renderPreflightMarkup renders failed check detail safely", () => {
+  const markup = renderPreflightMarkup({
+    state: "failed",
+    result: {
+      ready: false,
+      checks: [{ label: "Docker", status: "failed", detail: "<daemon unavailable>" }],
+    },
+  });
+
+  assert.match(markup, /Docker/);
+  assert.match(markup, /&lt;daemon unavailable&gt;/);
 });
 
 test("renderTaskListMarkup escapes user-controlled task fields", () => {
