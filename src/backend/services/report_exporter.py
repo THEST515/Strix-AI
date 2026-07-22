@@ -48,6 +48,15 @@ def build_markdown_export(
     for severity in ("critical", "high", "medium", "low", "info"):
         lines.append(f"- {severity_label_map.get(severity, severity)}：{severity_counts.get(severity, 0)}")
 
+    lines.extend(
+        [
+            "",
+            "## 验证状态统计",
+            f"- 已确认：{report.confirmed_count()}",
+            f"- 待验证：{report.candidate_count()}",
+        ]
+    )
+
     lines.extend(["", "## 风险详情"])
 
     if not report.findings:
@@ -61,6 +70,7 @@ def build_markdown_export(
                 f"### {finding.title}",
                 f"- 编号：{finding.finding_id}",
                 f"- 级别：{severity_label_map.get(finding.severity, finding.severity)}",
+                f"- 验证状态：{'待验证' if finding.verification_status == 'candidate' else '已确认'}",
                 f"- 摘要：{finding.summary}",
                 f"- 证据：{finding.evidence}",
                 f"- 修复建议：{finding.remediation}",

@@ -59,7 +59,7 @@ class DocxExporterTests(unittest.TestCase):
         self.assertIn("授权测试站点", [p.text for p in doc.paragraphs])
         self.assertIn("[高危]个人资料接口越权访问", [p.text for p in doc.paragraphs])
         self.assertEqual(doc.tables[0].cell(0, 1).text, "个人资料接口越权访问")
-        self.assertEqual(doc.tables[0].cell(1, 1).text, "高危")
+        self.assertEqual(doc.tables[0].cell(1, 1).text, "高危（已确认）")
         self.assertIn("未授权用户可读取其他用户资料。", doc.tables[0].cell(2, 1).text)
         self.assertIn("https://authorized-lab.example", doc.tables[0].cell(3, 1).text)
         self.assertIn("对对象读取增加服务端归属校验。", doc.tables[0].cell(5, 1).text)

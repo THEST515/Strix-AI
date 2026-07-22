@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
+from src.backend.services.intermediate_evidence import load_candidate_findings
+
 
 _TIMESTAMP_PREFIX = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)")
 _URL_PATTERN = re.compile(r"https?://[^\s\"']+")
@@ -14,9 +16,11 @@ _VULNERABILITY_ID_PATTERNS = (
     re.compile(r"Vulnerability report created:\s+id=([^\s]+)"),
 )
 _MEANINGFUL_EVENT_PATTERN = re.compile(
-    r"Opened page|Invoking tool fill_form|Added vulnerability report|Vulnerability report created|finish_scan",
+    r"Opened page|Invoking tool|Processing output item type=function_call|Added vulnerability report|"
+    r"Vulnerability report created|finish_scan|create_note|candidate evidence",
     re.IGNORECASE,
 )
+POST_FINDING_IDLE_ROUND_LIMIT = 8
 _ENVIRONMENT_FAILURE_PATTERN = re.compile(
     r"Payment Required|MaskedHTTPStatusError|missing Strix configuration|Tool agent-browser open not found|"
     r"filesystem permission error|PermissionError|Docker|connection refused|api key|quota|rate limit",
@@ -32,7 +36,7 @@ def analyze_runtime(run_dir: Path | None, *, task_status: str, target: str) -> d
     resolved_target = _extract_target(run_payload, fallback=target)
     llm_usage = _extract_llm_usage(run_payload)
     attack_surface = _extract_attack_surface(log_text, resolved_target)
-    evidence_progress = _extract_evidence_progress(log_text)
+    evidence_progress = _extract_evidence_progress(log_text, run_dir)
     failure_classification = _classify_failure(
         lifecycle_phase=lifecycle_phase,
         log_text=log_text,
@@ -73,6 +77,7 @@ def analyze_runtime(run_dir: Path | None, *, task_status: str, target: str) -> d
             failure_classification=failure_classification,
             attack_surface=attack_surface,
             evidence_progress=evidence_progress,
+            convergence_status=convergence["status"],
         ),
     }
 
@@ -99,8 +104,11 @@ def _read_log_text(log_path: Path) -> str:
 
 
 def _resolve_lifecycle_phase(*, task_status: str, run_status: str) -> str:
+    normalized_task = (task_status or "").strip().lower()
+    if normalized_task in {"completed", "partial", "failed", "cancelled"}:
+        return normalized_task
     normalized = (run_status or task_status or "").strip().lower()
-    if normalized in {"completed", "failed", "cancelled", "running"}:
+    if normalized in {"completed", "partial", "failed", "cancelled", "running"}:
         return normalized
     if normalized in {"created", "queued", "pending"}:
         return "pending"
@@ -159,7 +167,7 @@ def _extract_attack_surface(log_text: str, target: str) -> dict[str, int]:
     }
 
 
-def _extract_evidence_progress(log_text: str) -> dict[str, int]:
+def _extract_evidence_progress(log_text: str, run_dir: Path | None) -> dict[str, int]:
     vulnerability_ids: set[str] = set()
     for pattern in _VULNERABILITY_ID_PATTERNS:
         vulnerability_ids.update(pattern.findall(log_text))
@@ -170,6 +178,7 @@ def _extract_evidence_progress(log_text: str) -> dict[str, int]:
         "suspicions": suspicions,
         "validated_findings": len(vulnerability_ids),
         "reports_created": len(vulnerability_ids),
+        "candidate_findings": len(load_candidate_findings(run_dir)) if run_dir else 0,
     }
 
 
@@ -183,6 +192,9 @@ def _classify_failure(
 ) -> str | None:
     if lifecycle_phase == "cancelled":
         return "cancelled"
+
+    if lifecycle_phase == "partial":
+        return "evidence_in_progress"
 
     if lifecycle_phase == "completed":
         if evidence_progress["validated_findings"] > 0:
@@ -234,6 +246,7 @@ def _build_convergence(
         attack_surface=attack_surface,
         evidence_progress=evidence_progress,
         failure_classification=failure_classification,
+        idle_rounds=idle_rounds,
     )
 
     return {
@@ -256,9 +269,14 @@ def _derive_convergence_status(
     attack_surface: dict[str, int],
     evidence_progress: dict[str, int],
     failure_classification: str | None,
+    idle_rounds: int,
 ) -> str:
+    if evidence_progress["validated_findings"] > 0 and idle_rounds >= POST_FINDING_IDLE_ROUND_LIMIT:
+        return "validated_with_idle"
     if evidence_progress["validated_findings"] > 0:
         return "validated_findings"
+    if evidence_progress.get("candidate_findings", 0) > 0:
+        return "candidate_evidence"
     if failure_classification == "completed_without_findings":
         return "completed_without_findings"
     if failure_classification == "no_surface_found":
@@ -301,6 +319,8 @@ def _build_phase_label(
         return "等待启动"
     if lifecycle_phase == "cancelled":
         return "已终止"
+    if lifecycle_phase == "partial":
+        return "部分证据已保留"
     if lifecycle_phase == "unavailable":
         return "运行信息不可用"
     if evidence_progress["validated_findings"] > 0 or lifecycle_phase == "completed":
@@ -318,6 +338,7 @@ def _recommend_next_action(
     failure_classification: str | None,
     attack_surface: dict[str, int],
     evidence_progress: dict[str, int],
+    convergence_status: str,
 ) -> str:
     if failure_classification == "environment_failed":
         return "先修复运行环境或模型额度问题，再重新执行真实扫描。"
@@ -327,6 +348,8 @@ def _recommend_next_action(
         return "建议继续侦察入口，优先确认登录口、查询参数和 API 路径。"
     if failure_classification == "validated_findings":
         return "建议导出报告并复核漏洞证据，必要时补做单点复现。"
+    if convergence_status == "validated_with_idle":
+        return "已形成漏洞证据且后续出现空转，建议停止无效子代理并收口当前扫描。"
     if failure_classification == "completed_without_findings":
         return "当前可结束本次扫描；如需继续，建议缩小到高价值输入点发起下一轮验证。"
     if lifecycle_phase == "pending":

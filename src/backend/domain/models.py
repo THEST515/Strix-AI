@@ -13,6 +13,7 @@ class TaskStatus(StrEnum):
     PARSING = "parsing"
     SUMMARIZING = "summarizing"
     COMPLETED = "completed"
+    PARTIAL = "partial"
     FAILED = "failed"
     CANCELLED = "cancelled"
     DEMO_FIXTURE_LOADED = "demo_fixture_loaded"
@@ -28,6 +29,7 @@ class ScanTask:
     instruction_file: str | None = None
     status: TaskStatus = TaskStatus.DRAFT
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime | None = None
 
     def with_status(self, status: TaskStatus) -> "ScanTask":
         return replace(self, status=status)
@@ -41,6 +43,8 @@ class Finding:
     summary: str
     evidence: str
     remediation: str
+    verification_status: str = "confirmed"
+    source: str = "strix_report"
 
 
 @dataclass(slots=True, frozen=True)
@@ -51,7 +55,15 @@ class ScanReport:
     def severity_counts(self) -> dict[str, int]:
         counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
         for finding in self.findings:
+            if finding.verification_status != "confirmed":
+                continue
             if finding.severity not in counts:
                 counts[finding.severity] = 0
             counts[finding.severity] += 1
         return counts
+
+    def confirmed_count(self) -> int:
+        return sum(finding.verification_status == "confirmed" for finding in self.findings)
+
+    def candidate_count(self) -> int:
+        return sum(finding.verification_status == "candidate" for finding in self.findings)

@@ -68,6 +68,35 @@ class ScanReportTests(unittest.TestCase):
             {"critical": 1, "high": 2, "medium": 0, "low": 0, "info": 0},
         )
 
+    def test_candidate_findings_are_excluded_from_confirmed_counts(self) -> None:
+        report = ScanReport(
+            task_id="task-002",
+            findings=[
+                Finding(
+                    finding_id="confirmed-1",
+                    title="Confirmed issue",
+                    severity="high",
+                    summary="summary",
+                    evidence="evidence",
+                    remediation="remediation",
+                ),
+                Finding(
+                    finding_id="note-1",
+                    title="Candidate evidence",
+                    severity="high",
+                    summary="summary",
+                    evidence="evidence",
+                    remediation="remediation",
+                    verification_status="candidate",
+                    source="strix_note",
+                ),
+            ],
+        )
+
+        self.assertEqual(report.severity_counts()["high"], 1)
+        self.assertEqual(report.confirmed_count(), 1)
+        self.assertEqual(report.candidate_count(), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

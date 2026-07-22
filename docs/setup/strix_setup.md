@@ -153,7 +153,7 @@ C:\Users\<用户名>\.strix\cli-config.json
 先进入项目目录：
 
 ```powershell
-cd C:\Users\MMK20041021\Desktop\workspace\01_新项目
+cd <repo-root>
 ```
 
 按顺序检查：
@@ -277,4 +277,28 @@ strix -n --target ./src/frontend
 
 ## 10. 下一步
 
-环境就绪后，回到项目根目录，按 [README.md](C:/Users/MMK20041021/Desktop/workspace/01_新项目/README.md) 的“项目启动全过程”启动平台。
+环境就绪后，回到项目根目录，按 [README.md](../../README.md) 的“项目启动全过程”启动平台。
+
+## 11. 漏洞知识数据源
+
+真实服务器启动时会启用以下只读数据源：
+
+- NVD CVE 2.0：按已识别的产品 CPE 和明确版本查询 CVE、CVSS、CWE 与受影响 CPE。
+- CISA KEV：标记已知在野利用并提高验证优先级。
+- FIRST EPSS：提供利用概率和百分位并参与排序。
+
+缓存默认保存在项目的 `tmp/vulnerability_knowledge/`，有效期为 24 小时。扫描轮询只读取缓存；缓存不存在或过期时才启动后台刷新，因此外部服务超时不会阻塞当前扫描结果返回。
+
+NVD API Key 是可选项。需要提高官方接口额度时，只在启动服务器的 PowerShell 会话中设置：
+
+```powershell
+$env:NVD_API_KEY="你自己的 NVD API Key"
+```
+
+平台不会把该值写入缓存、日志或状态接口。可通过以下接口查看非敏感状态：
+
+```text
+GET /api/vulnerability-knowledge/status
+```
+
+外部目录命中只生成 `candidate`，不能单独证明目标存在漏洞。正式确认仍必须来自 Strix 的可复现请求、响应或 `vulnerabilities.json` 证据。

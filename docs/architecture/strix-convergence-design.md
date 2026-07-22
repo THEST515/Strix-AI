@@ -126,8 +126,9 @@
 3. `surface_found_but_unverified`
 4. `evidence_in_progress`
 5. `validated_findings`
-6. `completed_without_findings`
-7. `timeout_unconverged`
+6. `validated_with_idle`
+7. `completed_without_findings`
+8. `timeout_unconverged`
 
 ## 5. 运行时编排设计
 
@@ -157,6 +158,8 @@
 2. 疑似问题是否增长
 3. 报告数量是否增长
 4. 最近若干轮是否无“有意义事件”
+
+当已有 `validated_findings` 且连续八轮以上没有新的有效事件时，平台应显示 `validated_with_idle`，并停止无效子代理；已有正式 finding 仍保留在当前 `partial` 结果中。
 
 ### 5.3 收缩策略
 

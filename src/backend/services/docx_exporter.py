@@ -179,7 +179,8 @@ def _fill_risk_table(
     summary: dict[str, str],
 ) -> None:
     scan_time = task.created_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
-    risk_level = SEVERITY_LABELS.get(finding.severity, finding.severity)
+    verification_label = "待验证" if finding.verification_status == "candidate" else "已确认"
+    risk_level = f"{SEVERITY_LABELS.get(finding.severity, finding.severity)}（{verification_label}）"
 
     _replace_cell_text(table.cell(0, 1), finding.title)
     _replace_cell_text(table.cell(1, 1), risk_level)

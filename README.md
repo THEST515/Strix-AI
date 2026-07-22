@@ -23,11 +23,12 @@ Strix AI 辅助安全分析平台聚焦三件事：
 - 支持 Markdown 导出
 - 支持基于固定模板的 DOCX 导出
 - 支持单网站导出与多网站合并导出
-- 支持扫描时长预设：`3 / 5 / 10 分钟`
-- 支持真实扫描运行前检查：目标格式、Docker、Strix CLI 与 LLM 配置
+- 支持扫描时长滑块：`3-30 分钟`，并支持无限时长直到手动停止
 - 支持运行中提前吸收已落盘 findings
 - 支持在 `failed / timeout / interrupted / cancelled` 后尽量保留已发现漏洞
 - 支持 findings 中文化、LLM 翻译与持久化缓存
+- 支持按明确产品版本从 NVD CVE 2.0 获取候选，并用 CISA KEV 与 FIRST EPSS 排序
+- 支持漏洞知识本地缓存与后台刷新，外部服务异常不会阻塞 Strix 扫描
 
 ## 产品价值
 
@@ -67,6 +68,8 @@ strix_runs/<run>/finding_translations.zh-CN.json
 
 这样可以减少重复翻译，避免同一 finding 在多次加载时反复跳版本。
 
+外部漏洞知识只用于扩展候选面：只有 Strix 结构化证据明确识别产品和版本时才查询缓存，目录匹配结果始终标记为 `candidate`，不会仅凭 NVD、KEV 或 EPSS 自动升级为已确认漏洞。
+
 ### 3. 结果输出可直接交付
 
 支持两类导出：
@@ -97,11 +100,10 @@ DOCX 支持：
 ## 目录说明
 
 ```text
-01_新项目/
+strix-ai-security-demo-platform/
   assets/
   docs/
     architecture/
-    demo/
     setup/
   scripts/
   src/
@@ -114,7 +116,6 @@ DOCX 支持：
 说明：
 
 - `strix_runs/` 是本机真实扫描产物目录，可用于运行态解释与结果导入
-- `docs/demo/` 包含演示脚本和故障口径
 - `docs/setup/` 包含 Strix、Docker 和 API 配置说明
 
 ## Docker 与 Strix 部署配置
@@ -304,7 +305,7 @@ strix --help
 1. 创建任务
 2. 选择 `fixture` 或 `latest_real_run`
 3. 如为真实扫描，选择时长
-4. 确认运行前检查通过后，点击 `启动真实 Strix 扫描`
+4. 点击 `启动真实 Strix 扫描`
 5. 观察运行态阶段、攻击面、收敛判断和下一步建议
 6. 查看风险详情
 7. 导出 Markdown / DOCX
@@ -325,8 +326,6 @@ strix --help
 ### `fixture` 能跑，`latest_real_run` 不能跑
 
 这通常不是前端问题，而是 Strix 运行环境未就绪。
-
-平台会在创建真实扫描任务时显示 Docker、Strix CLI、LLM 配置和目标格式的检查结果，并在真正启动前再次复检。检查不通过时不会创建 Strix 扫描进程。
 
 ### 超时或失败后为什么还有报告
 
@@ -365,8 +364,6 @@ node scripts/browser_smoke_test.mjs http://127.0.0.1:8000/ latest_real_run
 ## 相关文档
 
 - [docs/setup/strix_setup.md](./docs/setup/strix_setup.md)
-- [docs/demo/demo_script.md](./docs/demo/demo_script.md)
-- [docs/demo/failure_playbook.md](./docs/demo/failure_playbook.md)
 - [docs/architecture/strix-convergence-design.md](./docs/architecture/strix-convergence-design.md)
 
 ## 使用边界

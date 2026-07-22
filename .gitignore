@@ -1,5 +1,12 @@
 __pycache__/
 *.pyc
 .DS_Store
+.env
+.env.*
+!.env.example
+cli-config.json
 dist/
+*.inspect.ndjson
+ppt-master-projects/
 strix_runs/
+tmp/

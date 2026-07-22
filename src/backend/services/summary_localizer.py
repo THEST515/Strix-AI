@@ -10,6 +10,7 @@ STATUS_TRANSLATIONS = {
     "low": "低危",
     "info": "提示",
     "completed": "已完成",
+    "partial": "部分结果",
     "running": "执行中",
     "created": "已创建",
     "demo_fixture_loaded": "演示结果",

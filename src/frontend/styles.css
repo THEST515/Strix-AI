@@ -605,6 +605,24 @@ body[data-mission-tone="live"] {
     rgba(255, 255, 255, 0.02);
 }
 
+.range-field output {
+  float: right;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.range-field input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.range-field small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .runtime-monitor__header {
   display: flex;
   align-items: center;
@@ -919,6 +937,33 @@ body[data-mission-tone="live"] {
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.finding-entry__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.verification-pill {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.verification-pill--confirmed {
+  border-color: var(--status);
+  color: var(--status);
+}
+
+.verification-pill--candidate {
+  border-color: var(--medium);
+  color: var(--medium);
 }
 
 .severity-pill--critical {

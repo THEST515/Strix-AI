@@ -20,6 +20,7 @@ test("createTaskFromApiPayload keeps backend summary fields", () => {
       status: "completed",
       result_source: "latest_real_run",
       scan_timeout_seconds: 600,
+      started_at: "2026-07-16T08:00:00+00:00",
     },
     report: {
       task_id: "task-001",
@@ -40,6 +41,44 @@ test("createTaskFromApiPayload keeps backend summary fields", () => {
   });
   assert.equal(task.resultSource, "latest_real_run");
   assert.equal(task.scanTimeoutSeconds, 600);
+  assert.equal(task.startedAt, "2026-07-16T08:00:00+00:00");
+});
+
+test("createTaskFromApiPayload preserves candidate verification metadata and counts", () => {
+  const task = createTaskFromApiPayload({
+    task: {
+      task_id: "task-010",
+      name: "partial scan",
+      target: "http://authorized-lab.example",
+      scan_mode: "standard",
+      result_source: "latest_real_run",
+      instruction: "report first",
+      status: "partial",
+    },
+    summary: {},
+    report: {
+      task_id: "task-010",
+      target: "http://authorized-lab.example",
+      confirmed_count: 0,
+      candidate_count: 1,
+      findings: [{
+        finding_id: "note-1",
+        title: "Candidate evidence",
+        severity: "info",
+        summary: "summary",
+        evidence: "safe evidence",
+        remediation: "verify",
+        verification_status: "candidate",
+        source: "strix_note",
+      }],
+    },
+  });
+
+  assert.equal(task.status, "partial");
+  assert.equal(task.report.confirmedCount, 0);
+  assert.equal(task.report.candidateCount, 1);
+  assert.equal(task.report.findings[0].verificationStatus, "candidate");
+  assert.equal(task.report.findings[0].source, "strix_note");
 });
 
 test("createTaskFromApiPayload localizes english finding fields from API payload", () => {

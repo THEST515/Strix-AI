@@ -18,6 +18,7 @@ const statusDisplayMap = {
   demo_fixture_loaded: "演示结果",
   created: "已创建",
   running: "执行中",
+  partial: "部分结果",
   failed: "执行失败",
 };
 
@@ -135,8 +136,13 @@ function renderFallbackSummary(task, counts, topFinding) {
     return "<p>未发现风险项。</p>";
   }
 
+  const confirmedCount = task.report.confirmedCount
+    ?? task.report.findings.filter((finding) => finding.verificationStatus !== "candidate").length;
+  const candidateCount = task.report.candidateCount
+    ?? task.report.findings.filter((finding) => finding.verificationStatus === "candidate").length;
+
   return `
-    <p>共发现 <strong>${escapeHTML(String(task.report.findings.length))}</strong> 条风险。</p>
+    <p>已确认漏洞 <strong>${escapeHTML(String(confirmedCount))}</strong>，候选风险 <strong>${escapeHTML(String(candidateCount))}</strong>。</p>
     <p><strong>首要问题：</strong>${escapeHTML(topFinding.title)}</p>
     <p><strong>级别分布：</strong>${escapeHTML(severityDisplayMap.critical)} ${escapeHTML(String(counts.critical))}，${escapeHTML(severityDisplayMap.high)} ${escapeHTML(String(counts.high))}，${escapeHTML(severityDisplayMap.medium)} ${escapeHTML(String(counts.medium))}</p>
   `;
@@ -183,7 +189,10 @@ export function renderFindingsMarkup(task) {
               <p class="micro-label">${escapeHTML(finding.findingId)}</p>
               <h3>${escapeHTML(finding.title)}</h3>
             </div>
-            <span class="severity-pill severity-pill--${escapeHTML(finding.severity)}">${escapeHTML(severityDisplayMap[finding.severity] ?? finding.severity)}</span>
+            <div class="finding-entry__badges">
+              <span class="verification-pill verification-pill--${escapeHTML(finding.verificationStatus ?? "confirmed")}">${finding.verificationStatus === "candidate" ? "待验证" : "已确认"}</span>
+              <span class="severity-pill severity-pill--${escapeHTML(finding.severity)}">${escapeHTML(severityDisplayMap[finding.severity] ?? finding.severity)}</span>
+            </div>
           </header>
           <div class="finding-entry__facets">
             <div class="finding-entry__facet">
@@ -257,6 +266,7 @@ export function renderRuntimeWorkbenchMarkup(runtime, options = {}) {
         </div>
         <div class="runtime-diagnosis">
           <div class="runtime-diagnosis__grid">
+            ${renderRuntimeMetric("已扫描时长", runtime.elapsedTimeText ?? "-")}
             ${renderRuntimeMetric("LLM 请求", llmUsage.requests)}
             ${renderRuntimeMetric("累计 Token", llmUsage.totalTokens)}
             ${renderRuntimeMetric("收敛评分", convergence.scoreText ?? "-")}

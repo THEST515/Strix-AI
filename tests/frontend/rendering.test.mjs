@@ -60,7 +60,7 @@ test("index.html exposes markdown and docx export choices", () => {
   assert.match(html, /DOCX 报告（全部网站合并）/);
 });
 
-test("index.html exposes scan timeout presets for real scans", () => {
+test("index.html exposes a continuous scan duration slider with unlimited mode", () => {
   const html = readFileSync(new URL("../../src/frontend/index.html", import.meta.url), "utf8");
 
   assert.match(html, /id="task-timeout"/);
@@ -206,6 +206,49 @@ test("renderFindingsMarkup escapes scan findings before innerHTML sinks", () => 
   assert.match(markup, /&lt;script&gt;alert\(&#39;xss&#39;\)&lt;\/script&gt;/);
 });
 
+test("renderFindingsMarkup distinguishes confirmed and candidate evidence", () => {
+  const markup = renderFindingsMarkup({
+    report: {
+      findings: [
+        {
+          findingId: "vuln-1",
+          title: "Confirmed",
+          severity: "high",
+          summary: "summary",
+          evidence: "evidence",
+          remediation: "fix",
+          verificationStatus: "confirmed",
+        },
+        {
+          findingId: "note-1",
+          title: "Candidate",
+          severity: "info",
+          summary: "summary",
+          evidence: "safe evidence",
+          remediation: "verify",
+          verificationStatus: "candidate",
+        },
+      ],
+    },
+  });
+
+  assert.match(markup, /已确认/);
+  assert.match(markup, /待验证/);
+});
+
+test("renderSummaryMarkup reports candidate count without claiming confirmation", () => {
+  const { aiSummaryMarkup } = renderSummaryMarkup({
+    report: {
+      confirmedCount: 0,
+      candidateCount: 1,
+      findings: [{ severity: "info", title: "Candidate", verificationStatus: "candidate" }],
+    },
+  });
+
+  assert.match(aiSummaryMarkup, /候选风险[^0-9]*1/);
+  assert.doesNotMatch(aiSummaryMarkup, /已确认漏洞[^0-9]*1/);
+});
+
 test("rendering uses Chinese severity labels in summary and findings", () => {
   const summary = renderSummaryMarkup({
     report: {
@@ -336,6 +379,13 @@ test("renderRuntimeWorkbenchMarkup renders runtime phase, attack surface, conver
   assert.match(markup, /1712579/);
   assert.match(markup, /下一步建议/);
   assert.match(markup, /建议收缩到表单与查询参数验证/);
+});
+
+test("frontend names post-finding idle convergence state", () => {
+  const appJs = readFileSync(new URL("../../src/frontend/app.js", import.meta.url), "utf8");
+
+  assert.match(appJs, /validated_with_idle/);
+  assert.match(appJs, /后续出现空转/);
 });
 
 test("renderRuntimeWorkbenchMarkup renders fixture empty-state copy without pretending to be a real scan", () => {

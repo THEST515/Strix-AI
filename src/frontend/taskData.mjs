@@ -13,6 +13,7 @@ const statusLabelMap = {
   demo_fixture_loaded: "演示结果",
   created: "已创建",
   running: "执行中",
+  partial: "部分结果",
   failed: "执行失败",
 };
 
@@ -156,6 +157,8 @@ function normalizeFinding(finding) {
     summary: localizeFindingText(finding.summary),
     evidence: localizeFindingText(finding.evidence),
     remediation: localizeFindingText(finding.remediation),
+    verificationStatus: finding.verification_status ?? finding.verificationStatus ?? "confirmed",
+    source: finding.source ?? "strix_report",
   };
 }
 
@@ -182,6 +185,7 @@ function buildMarkdownContent(task) {
   const findings = task.report.findings ?? [];
   const severityCounts = findings.reduce(
     (counts, finding) => {
+      if (finding.verificationStatus === "candidate") return counts;
       counts[finding.severity] = (counts[finding.severity] ?? 0) + 1;
       return counts;
     },
@@ -214,6 +218,10 @@ function buildMarkdownContent(task) {
     `- 低危：${severityCounts.low}`,
     `- 提示：${severityCounts.info}`,
     "",
+    "## 验证状态统计",
+    `- 已确认：${task.report.confirmedCount ?? findings.filter((finding) => finding.verificationStatus !== "candidate").length}`,
+    `- 待验证：${task.report.candidateCount ?? findings.filter((finding) => finding.verificationStatus === "candidate").length}`,
+    "",
     "## 风险详情",
   ];
 
@@ -226,6 +234,7 @@ function buildMarkdownContent(task) {
         `### ${finding.title}`,
         `- 编号：${finding.findingId}`,
         `- 级别：${severityLabelMap[finding.severity] ?? finding.severity}`,
+        `- 验证状态：${finding.verificationStatus === "candidate" ? "待验证" : "已确认"}`,
         `- 摘要：${finding.summary}`,
         `- 证据：${finding.evidence}`,
         `- 修复建议：${finding.remediation}`,
@@ -270,10 +279,13 @@ export function createTaskFromApiPayload(payload) {
     resultSource: payload.task.result_source ?? "fixture",
     instruction: payload.task.instruction,
     status: payload.task.status,
+    startedAt: payload.task.started_at ?? null,
     summary: normalizeSummary(payload.summary),
     report: {
       taskId: payload.report.task_id,
       target: payload.report.target,
+      confirmedCount: payload.report.confirmed_count ?? 0,
+      candidateCount: payload.report.candidate_count ?? 0,
       findings: payload.report.findings.map((finding) => normalizeFinding(finding)),
     },
   };
@@ -283,6 +295,7 @@ export function buildRunningTaskFromTask(task) {
   return {
     ...task,
     status: "running",
+    startedAt: task.startedAt ?? new Date().toISOString(),
     summary: {
       executiveSummary: "正在执行真实 Strix 扫描，请等待本次黑盒审查完成。",
       technicalAnalysis: "当前任务已提交到真实扫描链路，页面将在返回结果后刷新摘要与风险列表。",

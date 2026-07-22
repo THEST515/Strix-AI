@@ -12,6 +12,69 @@ from src.backend.services.runtime_analyzer import analyze_runtime
 
 
 class RuntimeAnalyzerTests(unittest.TestCase):
+    def test_platform_failed_state_overrides_stale_running_run_status(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir)
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "stale-running",
+                        "status": "running",
+                        "start_time": "2026-07-19T00:00:00+00:00",
+                        "end_time": None,
+                        "targets_info": [{"original": "http://authorized-lab.example"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            runtime = analyze_runtime(
+                run_dir,
+                task_status="failed",
+                target="http://authorized-lab.example",
+            )
+
+        self.assertEqual(runtime["phase"], "failed")
+        self.assertEqual(runtime["run_status"], "running")
+
+    def test_partial_state_reports_candidate_evidence(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir)
+            (run_dir / ".state").mkdir()
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "partial-run",
+                        "status": "running",
+                        "start_time": "2026-07-19T00:00:00+00:00",
+                        "end_time": None,
+                        "targets_info": [{"original": "http://authorized-lab.example"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / ".state" / "notes.json").write_text(
+                json.dumps(
+                    {
+                        "evidence": {
+                            "title": "Authenticated product access",
+                            "content": "Version: 5.0.0 and successfully authenticated",
+                            "category": "findings",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            runtime = analyze_runtime(
+                run_dir,
+                task_status="partial",
+                target="http://authorized-lab.example",
+            )
+
+        self.assertEqual(runtime["phase"], "partial")
+        self.assertEqual(runtime["convergence"]["status"], "candidate_evidence")
+        self.assertEqual(runtime["evidence_progress"]["candidate_findings"], 1)
     def test_analyze_runtime_reports_surface_and_convergence_for_running_scan(self) -> None:
         with TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir)
@@ -138,3 +201,81 @@ class RuntimeAnalyzerTests(unittest.TestCase):
         self.assertEqual(runtime["phase_label"], "证据整理")
         self.assertEqual(runtime["convergence"]["status"], "completed_without_findings")
         self.assertIn("结束", runtime["recommended_next_action"])
+
+    def test_analyze_runtime_marks_post_finding_idle_rounds_separately(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir)
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "idle-after-finding",
+                        "status": "running",
+                        "start_time": "2026-07-20T00:00:00+00:00",
+                        "end_time": None,
+                        "targets_info": [{"original": "https://authorized.example/"}],
+                        "llm_usage": {"requests": 8, "total_tokens": 12000},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "strix.log").write_text(
+                "\n".join(
+                    [
+                        "2026-07-20 00:00:01 INFO - browser: Opened page https://authorized.example/",
+                        "2026-07-20 00:00:05 INFO - strix.report.state: Added vulnerability report: vuln-1 - Missing Authentication",
+                        "2026-07-20 00:00:06 INFO - strix.tools.reporting.tool: Vulnerability report created: id=vuln-1 severity=high",
+                        "2026-07-20 00:00:07 DEBUG - openai.agents: Calling LLM",
+                        "2026-07-20 00:00:08 DEBUG - openai.agents: Calling LLM",
+                        "2026-07-20 00:00:09 DEBUG - openai.agents: Calling LLM",
+                        "2026-07-20 00:00:10 DEBUG - openai.agents: Calling LLM",
+                        "2026-07-20 00:00:11 DEBUG - openai.agents: Calling LLM",
+                        "2026-07-20 00:00:12 DEBUG - openai.agents: Calling LLM",
+                        "2026-07-20 00:00:13 DEBUG - openai.agents: Calling LLM",
+                        "2026-07-20 00:00:14 DEBUG - openai.agents: Calling LLM",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            runtime = analyze_runtime(run_dir, task_status="running", target="https://authorized.example/")
+
+        self.assertEqual(runtime["convergence"]["idle_rounds"], 8)
+        self.assertEqual(runtime["convergence"]["status"], "validated_with_idle")
+        self.assertIn("空转", runtime["recommended_next_action"])
+
+    def test_function_tool_activity_resets_post_finding_idle_rounds(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir)
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "active-after-finding",
+                        "status": "running",
+                        "start_time": "2026-07-20T00:00:00+00:00",
+                        "end_time": None,
+                        "targets_info": [{"original": "https://authorized.example/"}],
+                        "llm_usage": {"requests": 8, "total_tokens": 12000},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "strix.log").write_text(
+                "\n".join(
+                    [
+                        "2026-07-20 00:00:05 INFO - strix.report.state: Added vulnerability report: vuln-1 - Missing Authentication",
+                        "2026-07-20 00:00:06 INFO - strix.tools.reporting.tool: Vulnerability report created: id=vuln-1 severity=high",
+                        "2026-07-20 00:00:07 DEBUG - openai.agents: Calling LLM",
+                        "2026-07-20 00:00:08 DEBUG - openai.agents: Calling LLM",
+                        "2026-07-20 00:00:09 DEBUG - openai.agents: Calling LLM",
+                        "2026-07-20 00:00:10 DEBUG - openai.agents: Processing output item type=function_call class=ResponseFunctionToolCall",
+                        "2026-07-20 00:00:11 DEBUG - openai.agents: Calling LLM",
+                        "2026-07-20 00:00:12 DEBUG - openai.agents: Calling LLM",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            runtime = analyze_runtime(run_dir, task_status="running", target="https://authorized.example/")
+
+        self.assertEqual(runtime["convergence"]["idle_rounds"], 2)
+        self.assertEqual(runtime["convergence"]["status"], "validated_findings")

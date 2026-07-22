@@ -12,9 +12,248 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.backend.services.real_run_loader import load_latest_real_run_report
+from src.backend.services.vulnerability_knowledge import ProductFingerprint
+
+
+class _KnowledgeStub:
+    def __init__(self) -> None:
+        self.calls: list[ProductFingerprint] = []
+
+    def cached_candidates(self, fingerprint: ProductFingerprint) -> list[dict[str, str]]:
+        self.calls.append(fingerprint)
+        return [
+            {
+                "finding_id": "external-cve-2026-0001",
+                "cve_id": "CVE-2026-0001",
+                "title": "CVE-2026-0001 候选：weblogic 12.2.1.3",
+                "severity": "high",
+                "summary": "外部漏洞目录显示该版本可能受影响，需继续验证。",
+                "evidence": "NVD CPE 与明确识别的产品版本匹配，尚未证明目标可被利用。",
+                "remediation": "核对厂商公告并升级到修复版本。",
+                "verification_status": "candidate",
+                "source": "external_vulnerability_knowledge",
+            }
+        ]
 
 
 class RealRunLoaderTests(unittest.TestCase):
+    def test_merges_cached_external_candidates_for_explicit_product_version(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            runs_root = Path(temp_dir)
+            run_dir = runs_root / "versioned-weblogic"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "versioned-weblogic",
+                        "status": "running",
+                        "scan_mode": "standard",
+                        "start_time": "2026-07-20T00:00:00+00:00",
+                        "end_time": None,
+                        "targets_info": [
+                            {"original": "http://authorized-lab.example/console/login/LoginForm.jsp"}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "vulnerabilities.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "vuln-version",
+                            "title": "Oracle WebLogic Server console version disclosure",
+                            "severity": "info",
+                            "description": "The response identifies WebLogic Server version 12.2.1.3.",
+                            "technical_analysis": "Version: 12.2.1.3",
+                            "remediation_steps": "Remove version disclosure.",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            knowledge = _KnowledgeStub()
+
+            with patch(
+                "src.backend.services.real_run_loader.translate_findings_with_strix_llm",
+                side_effect=lambda findings: findings,
+            ):
+                result = load_latest_real_run_report(
+                    runs_root,
+                    allow_statuses={"running"},
+                    require_scan_results=False,
+                    knowledge_service=knowledge,
+                )
+
+        self.assertEqual(len(knowledge.calls), 1)
+        self.assertEqual(knowledge.calls[0].version, "12.2.1.3")
+        self.assertEqual(result["report"]["confirmed_count"], 1)
+        self.assertEqual(result["report"]["candidate_count"], 1)
+        self.assertEqual(
+            result["report"]["findings"][1]["source"],
+            "external_vulnerability_knowledge",
+        )
+    def test_loads_sanitized_candidate_findings_from_running_run_notes(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            runs_root = Path(temp_dir)
+            run_dir = runs_root / "candidate-run"
+            (run_dir / ".state").mkdir(parents=True)
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "candidate-run",
+                        "status": "running",
+                        "scan_mode": "standard",
+                        "start_time": "2026-07-19T00:00:00+00:00",
+                        "end_time": None,
+                        "targets_info": [{"original": "http://authorized-lab.example/admin/"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / ".state" / "notes.json").write_text(
+                json.dumps(
+                    {
+                        "evidence": {
+                            "title": "Product version and authenticated access",
+                            "content": "Version: 5.0.0\nDefault credentials found: admin:secret-value",
+                            "category": "findings",
+                        },
+                        "method": {
+                            "title": "Next action",
+                            "content": "Need to continue exploring",
+                            "category": "methodology",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = load_latest_real_run_report(
+                runs_root,
+                target="http://authorized-lab.example/admin/",
+                allow_statuses={"running"},
+                require_scan_results=False,
+            )
+
+        self.assertEqual(result["report"]["confirmed_count"], 0)
+        self.assertEqual(result["report"]["candidate_count"], 1)
+        self.assertEqual(result["report"]["findings"][0]["verification_status"], "candidate")
+        self.assertNotIn("secret-value", result["report"]["findings"][0]["evidence"])
+        self.assertIn("候选", result["summary"]["executive_summary"])
+
+    def test_autonomously_adds_web_logic_cve_candidate_without_user_cve_instruction(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            runs_root = Path(temp_dir)
+            run_dir = runs_root / "weblogic-run"
+            run_dir.mkdir()
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "weblogic-run",
+                        "status": "running",
+                        "scan_mode": "standard",
+                        "start_time": "2026-07-20T00:00:00+00:00",
+                        "end_time": None,
+                        "targets_info": [{"original": "http://authorized-lab.example/ws_utc/config.do"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "strix.log").write_text(
+                "WebLogic ws_utc keystore file upload is reachable without authentication.\n",
+                encoding="utf-8",
+            )
+            (run_dir / "vulnerabilities.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "vuln-0001",
+                            "title": "Unauthenticated WebLogic settings access",
+                            "severity": "critical",
+                            "description": "The keystore settings endpoint allows file upload without authentication.",
+                            "technical_analysis": "The ws_utc settings API responds without authentication.",
+                            "remediation_steps": "Restrict access to ws_utc and enable authentication.",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "src.backend.services.real_run_loader.translate_findings_with_strix_llm",
+                side_effect=lambda findings: findings,
+            ):
+                result = load_latest_real_run_report(
+                    runs_root,
+                    target="http://authorized-lab.example/ws_utc/config.do",
+                    allow_statuses={"running"},
+                    require_scan_results=False,
+                )
+
+        self.assertEqual(result["report"]["confirmed_count"], 1)
+        self.assertEqual(result["report"]["candidate_count"], 1)
+        self.assertIn("CVE-2018-2894", result["report"]["findings"][1]["title"])
+        self.assertEqual(result["report"]["findings"][1]["verification_status"], "candidate")
+
+    def test_confirmed_cve_finding_replaces_matching_candidate_note(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            runs_root = Path(temp_dir)
+            run_dir = runs_root / "confirmed-run"
+            (run_dir / ".state").mkdir(parents=True)
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "confirmed-run",
+                        "status": "completed",
+                        "scan_mode": "standard",
+                        "start_time": "2026-07-19T00:00:00+00:00",
+                        "end_time": "2026-07-19T00:04:00+00:00",
+                        "targets_info": [{"original": "http://authorized-lab.example/admin/"}],
+                        "scan_results": {
+                            "executive_summary": "confirmed",
+                            "technical_analysis": "confirmed",
+                            "recommendations": "fix",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "vulnerabilities.json").write_text(
+                json.dumps(
+                    [{
+                        "id": "vuln-1",
+                        "title": "CVE-2020-5504 SQL Injection",
+                        "severity": "high",
+                        "description": "confirmed SQL injection",
+                        "technical_analysis": "reproducible request",
+                        "remediation_steps": "upgrade",
+                    }]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / ".state" / "notes.json").write_text(
+                json.dumps({
+                    "cve-note": {
+                        "title": "Possible CVE-2020-5504",
+                        "content": "CVE-2020-5504 matched product Version: 5.0.0",
+                        "category": "findings",
+                    }
+                }),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "src.backend.services.real_run_loader.translate_findings_with_strix_llm",
+                side_effect=lambda findings: findings,
+            ):
+                result = load_latest_real_run_report(runs_root)
+
+        self.assertEqual(result["report"]["confirmed_count"], 1)
+        self.assertEqual(result["report"]["candidate_count"], 0)
+        self.assertEqual(len(result["report"]["findings"]), 1)
+        self.assertEqual(result["report"]["findings"][0]["verification_status"], "confirmed")
+
     def test_loads_latest_real_run_report_from_strix_runs(self) -> None:
         with TemporaryDirectory() as temp_dir:
             runs_root = Path(temp_dir)
@@ -304,6 +543,131 @@ class RealRunLoaderTests(unittest.TestCase):
                 second = load_latest_real_run_report(runs_root, target="http://localhost/search")
 
         self.assertEqual(second["report"]["findings"][0]["title"], "search 接口存在 SQL 注入")
+
+    def test_does_not_cache_untranslated_llm_fallback(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            runs_root = Path(temp_dir)
+            run_dir = runs_root / "01_running"
+            run_dir.mkdir()
+            vulnerabilities = [
+                {
+                    "id": "vuln-0001",
+                    "title": "Weak Database Password",
+                    "severity": "critical",
+                    "description": "The administrative account accepts a weak password.",
+                    "technical_analysis": "An authenticated administrative session was established.",
+                    "remediation_steps": "Set a unique high-entropy password and rotate credentials.",
+                }
+            ]
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "01_running",
+                        "status": "running",
+                        "scan_mode": "standard",
+                        "start_time": "2026-07-19T00:00:00+00:00",
+                        "end_time": None,
+                        "targets_info": [{"original": "http://localhost/admin"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "vulnerabilities.json").write_text(
+                json.dumps(vulnerabilities),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "src.backend.services.real_run_loader.translate_findings_with_strix_llm",
+                side_effect=lambda findings: findings,
+            ):
+                result = load_latest_real_run_report(
+                    runs_root,
+                    target="http://localhost/admin",
+                    allow_statuses={"running"},
+                    require_scan_results=False,
+                )
+
+            self.assertEqual(result["report"]["findings"][0]["title"], "Weak Database Password")
+            self.assertFalse((run_dir / "finding_translations.zh-CN.json").exists())
+
+    def test_retries_when_cached_finding_is_not_translated(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            runs_root = Path(temp_dir)
+            run_dir = runs_root / "01_running"
+            run_dir.mkdir()
+            vulnerabilities = [
+                {
+                    "id": "vuln-0001",
+                    "title": "Weak Database Password",
+                    "severity": "critical",
+                    "description": "The administrative account accepts a weak password.",
+                    "technical_analysis": "An authenticated administrative session was established.",
+                    "remediation_steps": "Set a unique high-entropy password and rotate credentials.",
+                }
+            ]
+            source_hash = sha256(
+                json.dumps(vulnerabilities, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            ).hexdigest()
+            (run_dir / "run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "01_running",
+                        "status": "running",
+                        "scan_mode": "standard",
+                        "start_time": "2026-07-19T00:00:00+00:00",
+                        "end_time": None,
+                        "targets_info": [{"original": "http://localhost/admin"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "vulnerabilities.json").write_text(
+                json.dumps(vulnerabilities),
+                encoding="utf-8",
+            )
+            (run_dir / "finding_translations.zh-CN.json").write_text(
+                json.dumps(
+                    {
+                        "source_hash": source_hash,
+                        "findings": [
+                            {
+                                "finding_id": "vuln-0001",
+                                "title": "Weak Database Password",
+                                "severity": "critical",
+                                "summary": "The administrative account accepts a weak password.",
+                                "evidence": "An authenticated administrative session was established.",
+                                "remediation": "Set a unique high-entropy password and rotate credentials.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            translated = [
+                {
+                    "finding_id": "vuln-0001",
+                    "title": "数据库管理账户使用弱口令",
+                    "severity": "critical",
+                    "summary": "管理账户接受弱口令登录。",
+                    "evidence": "已建立具有管理权限的认证会话。",
+                    "remediation": "设置唯一的高强度口令并轮换凭据。",
+                }
+            ]
+
+            with patch(
+                "src.backend.services.real_run_loader.translate_findings_with_strix_llm",
+                return_value=translated,
+            ) as translator:
+                result = load_latest_real_run_report(
+                    runs_root,
+                    target="http://localhost/admin",
+                    allow_statuses={"running"},
+                    require_scan_results=False,
+                )
+
+            translator.assert_called_once()
+            self.assertEqual(result["report"]["findings"][0]["title"], "数据库管理账户使用弱口令")
 
     def test_localizes_high_frequency_web_vulnerability_terms_without_llm(self) -> None:
         with TemporaryDirectory() as temp_dir:

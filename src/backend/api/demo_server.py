@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import asdict, replace
+from datetime import datetime, timezone
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -18,7 +19,9 @@ from src.backend.services.preflight import run_preflight
 from src.backend.services.real_run_loader import load_latest_real_run_report
 from src.backend.services.report_exporter import build_export_payload
 from src.backend.services.runtime_analyzer import analyze_runtime
+from src.backend.services.scan_strategy import build_effective_instruction
 from src.backend.services.strix_runner import cancel_strix_scan, start_strix_scan, wait_for_strix_scan
+from src.backend.services.vulnerability_knowledge import VulnerabilityKnowledgeService
 
 
 class DemoTaskService:
@@ -31,6 +34,7 @@ class DemoTaskService:
         strix_scan_waiter=None,
         strix_scan_canceller=None,
         preflight_runner=None,
+        vulnerability_knowledge_service=None,
         real_scan_timeout_seconds: int = 300,
     ) -> None:
         self.fixture_path = Path(fixture_path)
@@ -46,8 +50,11 @@ class DemoTaskService:
         self._preflight_runner = preflight_runner or (
             lambda target: run_preflight(target, target_is_allowed=self._is_allowed_target)
         )
+        self._vulnerability_knowledge_service = vulnerability_knowledge_service
         self._real_scan_timeout_seconds = real_scan_timeout_seconds
         self._active_real_runs: dict[str, dict[str, Any]] = {}
+        self._run_dirs_by_task_id: dict[str, Path] = {}
+        self._run_baselines_by_task_id: dict[str, set[str]] = {}
         self._lock = threading.RLock()
 
     def create_task(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -57,7 +64,9 @@ class DemoTaskService:
         scan_mode = str(payload.get("scanMode", "quick")).strip() or "quick"
         instruction = str(payload.get("instruction", "")).strip() or None
         result_source = str(payload.get("resultSource", "fixture")).strip() or "fixture"
-        scan_timeout_seconds = int(payload.get("scanTimeoutSeconds", self._real_scan_timeout_seconds))
+        scan_timeout_seconds = payload.get("scanTimeoutSeconds", self._real_scan_timeout_seconds)
+        if scan_timeout_seconds is not None:
+            scan_timeout_seconds = int(scan_timeout_seconds)
 
         if not name:
             raise ValueError("name is required")
@@ -65,11 +74,16 @@ class DemoTaskService:
             raise ValueError("target is required")
         if not self._is_allowed_target(target):
             raise ValueError("目标地址必须使用 http(s) 协议，或使用相对演示路径")
-        if scan_timeout_seconds <= 0:
+        if scan_timeout_seconds is not None and scan_timeout_seconds <= 0:
             raise ValueError("扫描时长必须大于 0 秒")
 
         if result_source == "latest_real_run":
             report_bundle = self._build_pending_real_run_bundle(task_id=task_id, target=target)
+            instruction = build_effective_instruction(
+                scan_mode=scan_mode,
+                timeout_seconds=scan_timeout_seconds,
+                user_instruction=instruction,
+            )
         else:
             report_bundle = self._load_report_bundle(task_id=task_id, target=target, result_source=result_source)
 
@@ -110,16 +124,24 @@ class DemoTaskService:
             "tasks": [self._serialize_task(task) for task in reversed(self._tasks)],
         }
 
-    def get_task_results(self, task_id: str) -> dict[str, Any]:
+    def get_task_results(self, task_id: str, *, refresh: bool = True) -> dict[str, Any]:
         with self._lock:
             task = self._get_task(task_id)
-            self._refresh_live_real_run_artifacts(task)
-            report = self._reports_by_task_id[task_id]
-            return {
-                "task": self._serialize_task(task),
-                "report": self._serialize_report(report, task),
-                "summary": self._summaries_by_task_id[task_id],
-            }
+            if refresh:
+                self._refresh_live_real_run_artifacts(task)
+            task = self._get_task(task_id)
+            if refresh:
+                self._enforce_convergence_guard(task)
+            task = self._get_task(task_id)
+            return self._build_task_results_response(task)
+
+    def _build_task_results_response(self, task: ScanTask) -> dict[str, Any]:
+        report = self._reports_by_task_id[task.task_id]
+        return {
+            "task": self._serialize_task(task),
+            "report": self._serialize_report(report, task),
+            "summary": self._summaries_by_task_id[task.task_id],
+        }
 
     def get_task_summary(self, task_id: str) -> dict[str, Any]:
         task = self._get_task(task_id)
@@ -129,16 +151,63 @@ class DemoTaskService:
         }
 
     def get_task_runtime(self, task_id: str) -> dict[str, Any]:
-        task = self._get_task(task_id)
-        config = self._task_configs_by_task_id[task_id]
-        runtime = self._build_runtime_payload(task=task, target=config["target"], result_source=config["result_source"])
+        with self._lock:
+            task = self._get_task(task_id)
+            self._refresh_live_real_run_artifacts(task)
+            task = self._get_task(task_id)
+            self._enforce_convergence_guard(task)
+            task = self._get_task(task_id)
+            config = self._task_configs_by_task_id[task_id]
+            runtime = self._build_runtime_payload(task=task, target=config["target"], result_source=config["result_source"])
         return {
             "task": self._serialize_task(task),
             "runtime": runtime,
         }
 
+    def _enforce_convergence_guard(self, task: ScanTask) -> None:
+        if task.status != TaskStatus.RUNNING:
+            return
+        config = self._task_configs_by_task_id.get(task.task_id, {})
+        if config.get("result_source") != "latest_real_run":
+            return
+        active_run = self._active_real_runs.get(task.task_id)
+        if active_run is None:
+            return
+
+        runtime = self._build_runtime_payload(
+            task=task,
+            target=config["target"],
+            result_source=config["result_source"],
+        )
+        if runtime["convergence"]["status"] != "validated_with_idle":
+            return
+
+        report = self._reports_by_task_id.get(task.task_id, ScanReport(task_id=task.task_id, findings=[]))
+        if report.confirmed_count() == 0:
+            return
+
+        self._strix_scan_canceller(active_run["handle"])
+        self._summaries_by_task_id[task.task_id] = self._build_partial_failure_summary(
+            confirmed_count=report.confirmed_count(),
+            candidate_count=report.candidate_count(),
+            failed_status="convergence",
+        )
+        self._replace_task(replace(task, status=TaskStatus.PARTIAL))
+        self._active_real_runs.pop(task.task_id, None)
+
     def get_preflight(self, target: str) -> dict[str, object]:
         return self._preflight_runner(target)
+
+    def get_vulnerability_knowledge_status(self) -> dict[str, Any]:
+        if self._vulnerability_knowledge_service is None:
+            return {
+                "enabled": False,
+                "sources": [],
+                "cache_entries": 0,
+                "ttl_seconds": None,
+                "refreshing": 0,
+            }
+        return self._vulnerability_knowledge_service.status()
 
     def get_task_export(
         self,
@@ -181,12 +250,19 @@ class DemoTaskService:
             with self._lock:
                 if task_id in self._active_real_runs:
                     raise ValueError("real scan is already running")
-            running_task = replace(task, target=config["target"], status=TaskStatus.RUNNING)
+            running_task = replace(
+                task,
+                target=config["target"],
+                status=TaskStatus.RUNNING,
+                started_at=datetime.now(timezone.utc),
+            )
             self._replace_task(running_task)
             self._reports_by_task_id[task_id] = ScanReport(task_id=task_id, findings=[])
             self._summaries_by_task_id[task_id] = self._build_running_summary()
-            self._start_real_scan_in_background(running_task, config["scan_timeout_seconds"])
-            return self.get_task_results(task_id)
+            if not self._start_real_scan_in_background(running_task, config["scan_timeout_seconds"]):
+                return self._build_task_results_response(self._get_task(task_id))
+            self._refresh_live_real_run_artifacts(running_task, allow_lifecycle_transition=False)
+            return self._build_task_results_response(running_task)
 
         report_bundle = self._load_report_bundle(
             task_id=task_id,
@@ -225,15 +301,21 @@ class DemoTaskService:
     def cancel_task(self, task_id: str) -> dict[str, Any]:
         task = self._get_task(task_id)
         with self._lock:
+            self._refresh_live_real_run_artifacts(task)
+            task = self._get_task(task_id)
+        with self._lock:
             active_run = self._active_real_runs.get(task_id)
         if active_run is None:
             raise ValueError("real scan is not running")
 
         self._strix_scan_canceller(active_run["handle"])
-        cancelled_task = replace(task, status=TaskStatus.CANCELLED)
+        report = self._reports_by_task_id[task_id]
+        cancelled_status = TaskStatus.PARTIAL if report.findings else TaskStatus.CANCELLED
+        cancelled_task = replace(task, status=cancelled_status)
         self._replace_task(cancelled_task)
-        self._reports_by_task_id[task_id] = ScanReport(task_id=task_id, findings=[])
-        self._summaries_by_task_id[task_id] = self._build_cancelled_summary()
+        if not report.findings:
+            self._reports_by_task_id[task_id] = ScanReport(task_id=task_id, findings=[])
+            self._summaries_by_task_id[task_id] = self._build_cancelled_summary()
         with self._lock:
             self._active_real_runs.pop(task_id, None)
         return self.get_task_results(task_id)
@@ -249,10 +331,21 @@ class DemoTaskService:
     def _cancel_real_scan(self, handle) -> None:
         cancel_strix_scan(handle)
 
-    def _start_real_scan_in_background(self, task: ScanTask, timeout_seconds: int) -> None:
+    def _start_real_scan_in_background(self, task: ScanTask, timeout_seconds: int) -> bool:
         if self.strix_runs_root is not None:
             self.strix_runs_root.mkdir(parents=True, exist_ok=True)
-        handle = self._strix_scan_starter(task)
+            self._run_baselines_by_task_id[task.task_id] = {
+                path.name
+                for path in self.strix_runs_root.iterdir()
+                if path.is_dir() and not path.name.startswith(".")
+            }
+        try:
+            handle = self._strix_scan_starter(task)
+        except Exception as error:
+            self._reports_by_task_id[task.task_id] = ScanReport(task_id=task.task_id, findings=[])
+            self._summaries_by_task_id[task.task_id] = self._build_failed_summary(str(error))
+            self._replace_task(replace(task, status=TaskStatus.FAILED))
+            return False
         worker = threading.Thread(
             target=self._finalize_real_scan_in_background,
             args=(task.task_id, task, handle, timeout_seconds),
@@ -261,14 +354,19 @@ class DemoTaskService:
         with self._lock:
             self._active_real_runs[task.task_id] = {"handle": handle, "worker": worker}
         worker.start()
+        return True
 
     def _finalize_real_scan_in_background(self, task_id: str, task: ScanTask, handle, timeout_seconds: int) -> None:
         try:
-            self._strix_scan_waiter(handle, timeout_seconds=timeout_seconds)
+            completed_run_dir = self._strix_scan_waiter(handle, timeout_seconds=timeout_seconds)
+            if completed_run_dir is not None:
+                self._run_dirs_by_task_id[task_id] = Path(completed_run_dir)
             report_bundle = self._load_report_bundle(
                 task_id=task_id,
                 target=task.target,
                 result_source="latest_real_run",
+                run_dir=completed_run_dir,
+                created_after=task.created_at.timestamp() if completed_run_dir is None else None,
             )
             completed_task = replace(task, status=report_bundle["status"])
             self._replace_task(completed_task)
@@ -279,15 +377,15 @@ class DemoTaskService:
                 if not self._restore_partial_real_run_bundle(task_id=task_id, target=task.target, failed_status="timeout"):
                     self._reports_by_task_id[task_id] = ScanReport(task_id=task_id, findings=[])
                     self._summaries_by_task_id[task_id] = self._build_timeout_summary(timeout_seconds)
-                self._replace_task(replace(task, status=TaskStatus.FAILED))
+                self._replace_task(replace(task, status=self._status_after_abnormal_end(task_id, TaskStatus.FAILED)))
         except (ValueError, FileNotFoundError) as error:
-            if self._get_task(task_id).status == TaskStatus.CANCELLED:
+            if self._get_task(task_id).status in {TaskStatus.CANCELLED, TaskStatus.PARTIAL}:
                 return
             with self._lock:
                 if not self._restore_partial_real_run_bundle(task_id=task_id, target=task.target, failed_status="failed"):
                     self._reports_by_task_id[task_id] = ScanReport(task_id=task_id, findings=[])
                     self._summaries_by_task_id[task_id] = self._build_failed_summary(str(error))
-                self._replace_task(replace(task, status=TaskStatus.FAILED))
+                self._replace_task(replace(task, status=self._status_after_abnormal_end(task_id, TaskStatus.FAILED)))
         finally:
             with self._lock:
                 self._active_real_runs.pop(task_id, None)
@@ -317,6 +415,7 @@ class DemoTaskService:
         payload = asdict(task)
         payload["status"] = task.status.value
         payload["created_at"] = task.created_at.isoformat()
+        payload["started_at"] = task.started_at.isoformat() if task.started_at else None
         config = self._task_configs_by_task_id.get(task.task_id, {})
         payload["result_source"] = config.get("result_source", "fixture")
         payload["scan_timeout_seconds"] = config.get("scan_timeout_seconds", self._real_scan_timeout_seconds)
@@ -327,8 +426,14 @@ class DemoTaskService:
             "task_id": report.task_id,
             "target": task.target,
             "severity_counts": report.severity_counts(),
+            "confirmed_count": report.confirmed_count(),
+            "candidate_count": report.candidate_count(),
             "findings": [asdict(finding) for finding in report.findings],
         }
+
+    def _status_after_abnormal_end(self, task_id: str, empty_status: TaskStatus) -> TaskStatus:
+        report = self._reports_by_task_id[task_id]
+        return TaskStatus.PARTIAL if report.findings else empty_status
 
     def _build_runtime_payload(self, *, task: ScanTask, target: str, result_source: str) -> dict[str, Any]:
         if result_source != "latest_real_run" or self.strix_runs_root is None:
@@ -342,7 +447,7 @@ class DemoTaskService:
             runtime["log_tail"] = "本次真实扫描已被用户终止。"
             return runtime
 
-        latest_run = self._find_latest_run_for_target(target, created_after=task.created_at.timestamp())
+        latest_run = self._find_or_bind_run_for_task(task, target)
         if latest_run is None:
             return analyze_runtime(
                 None,
@@ -352,13 +457,34 @@ class DemoTaskService:
 
         return analyze_runtime(latest_run, task_status=task.status.value, target=target)
 
-    def _find_latest_run_for_target(self, target: str, created_after: float | None = None) -> Path | None:
+    def _find_or_bind_run_for_task(self, task: ScanTask, target: str) -> Path | None:
+        bound_run = self._run_dirs_by_task_id.get(task.task_id)
+        if bound_run is not None and bound_run.exists():
+            return bound_run
+
+        baseline = self._run_baselines_by_task_id.get(task.task_id)
+        if baseline is not None:
+            latest_run = self._find_latest_run_for_target(target, excluded_run_names=baseline)
+        else:
+            latest_run = self._find_latest_run_for_target(target, created_after=task.created_at.timestamp())
+        if latest_run is not None:
+            self._run_dirs_by_task_id[task.task_id] = latest_run
+        return latest_run
+
+    def _find_latest_run_for_target(
+        self,
+        target: str,
+        created_after: float | None = None,
+        excluded_run_names: set[str] | None = None,
+    ) -> Path | None:
         if self.strix_runs_root is None or not self.strix_runs_root.exists():
             return None
 
         candidates: list[Path] = []
         for run_dir in self.strix_runs_root.iterdir():
             if not run_dir.is_dir() or run_dir.name.startswith("."):
+                continue
+            if excluded_run_names and run_dir.name in excluded_run_names:
                 continue
 
             run_path = run_dir / "run.json"
@@ -411,13 +537,29 @@ class DemoTaskService:
             summary=payload["summary"],
             evidence=payload["evidence"],
             remediation=payload["remediation"],
+            verification_status=payload.get("verification_status", "confirmed"),
+            source=payload.get("source", "strix_report"),
         )
 
-    def _load_report_bundle(self, *, task_id: str, target: str, result_source: str) -> dict[str, Any]:
+    def _load_report_bundle(
+        self,
+        *,
+        task_id: str,
+        target: str,
+        result_source: str,
+        run_dir: str | Path | None = None,
+        created_after: float | None = None,
+    ) -> dict[str, Any]:
         if result_source == "latest_real_run":
             if self.strix_runs_root is None:
                 raise ValueError("real run source is unavailable")
-            real_run = load_latest_real_run_report(self.strix_runs_root, target=target)
+            real_run = load_latest_real_run_report(
+                self.strix_runs_root,
+                run_dir=run_dir,
+                target=target,
+                created_after=created_after,
+                knowledge_service=self._vulnerability_knowledge_service,
+            )
             return {
                 "target": real_run["report"]["target"],
                 "report": ScanReport(
@@ -439,11 +581,11 @@ class DemoTaskService:
             "status": TaskStatus.DEMO_FIXTURE_LOADED,
         }
 
-    def _refresh_live_real_run_artifacts(self, task: ScanTask) -> None:
+    def _refresh_live_real_run_artifacts(self, task: ScanTask, *, allow_lifecycle_transition: bool = True) -> None:
         config = self._task_configs_by_task_id.get(task.task_id, {})
         if config.get("result_source") != "latest_real_run" or self.strix_runs_root is None:
             return
-        if task.status not in {TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.COMPLETED}:
+        if task.status not in {TaskStatus.RUNNING, TaskStatus.PARTIAL, TaskStatus.FAILED, TaskStatus.COMPLETED}:
             return
 
         existing_report = self._reports_by_task_id.get(task.task_id)
@@ -451,16 +593,22 @@ class DemoTaskService:
             task.status in {TaskStatus.FAILED, TaskStatus.COMPLETED}
             and existing_report is not None
             and existing_report.findings
+            and self._vulnerability_knowledge_service is None
         ):
             return
 
         try:
+            bound_run = self._find_or_bind_run_for_task(task, config["target"])
+            if bound_run is None and task.task_id in self._run_baselines_by_task_id:
+                return
             partial_run = load_latest_real_run_report(
                 self.strix_runs_root,
+                run_dir=bound_run,
                 target=config["target"],
-                created_after=task.created_at.timestamp(),
+                created_after=task.created_at.timestamp() if bound_run is None else None,
                 allow_statuses={"running", "completed", "failed", "interrupted", "cancelled"},
                 require_scan_results=False,
+                knowledge_service=self._vulnerability_knowledge_service,
             )
         except FileNotFoundError:
             return
@@ -471,15 +619,28 @@ class DemoTaskService:
                 self._build_finding(finding_payload) for finding_payload in partial_run["report"]["findings"]
             ],
         )
-        if (
+        keep_existing_findings = (
             existing_report is not None
             and existing_report.findings
             and self._finding_ids(existing_report.findings) == self._finding_ids(refreshed_report.findings)
-        ):
-            return
+            and self._finding_localization_score(existing_report.findings)
+            >= self._finding_localization_score(refreshed_report.findings)
+        )
 
-        self._reports_by_task_id[task.task_id] = refreshed_report
-        if task.status == TaskStatus.RUNNING and self._reports_by_task_id[task.task_id].findings:
+        if not keep_existing_findings:
+            self._reports_by_task_id[task.task_id] = refreshed_report
+        if (
+            allow_lifecycle_transition
+            and task.status == TaskStatus.PARTIAL
+            and partial_run["run"]["status"] == "completed"
+        ):
+            self._summaries_by_task_id[task.task_id] = partial_run["summary"]
+            self._replace_task(replace(task, status=TaskStatus.COMPLETED))
+        elif (
+            allow_lifecycle_transition
+            and task.status == TaskStatus.RUNNING
+            and self._reports_by_task_id[task.task_id].findings
+        ):
             self._summaries_by_task_id[task.task_id] = partial_run["summary"]
 
     def _restore_partial_real_run_bundle(self, *, task_id: str, target: str, failed_status: str) -> bool:
@@ -487,12 +648,17 @@ class DemoTaskService:
             return False
         task = self._get_task(task_id)
         try:
+            bound_run = self._find_or_bind_run_for_task(task, target)
+            if bound_run is None and task.task_id in self._run_baselines_by_task_id:
+                return False
             partial_run = load_latest_real_run_report(
                 self.strix_runs_root,
+                run_dir=bound_run,
                 target=target,
-                created_after=task.created_at.timestamp(),
+                created_after=task.created_at.timestamp() if bound_run is None else None,
                 allow_statuses={"running", "completed", "failed", "interrupted", "cancelled"},
                 require_scan_results=False,
+                knowledge_service=self._vulnerability_knowledge_service,
             )
         except FileNotFoundError:
             return False
@@ -505,7 +671,8 @@ class DemoTaskService:
 
         self._reports_by_task_id[task_id] = ScanReport(task_id=task_id, findings=findings)
         self._summaries_by_task_id[task_id] = self._build_partial_failure_summary(
-            finding_count=len(findings),
+            confirmed_count=sum(finding.verification_status == "confirmed" for finding in findings),
+            candidate_count=sum(finding.verification_status == "candidate" for finding in findings),
             failed_status=failed_status,
         )
         return True
@@ -519,6 +686,15 @@ class DemoTaskService:
     @staticmethod
     def _finding_ids(findings) -> tuple[str, ...]:
         return tuple(finding.finding_id for finding in findings)
+
+    @staticmethod
+    def _finding_localization_score(findings) -> int:
+        return sum(
+            1
+            for finding in findings
+            for value in (finding.title, finding.summary, finding.evidence, finding.remediation)
+            if any("\u4e00" <= char <= "\u9fff" for char in value)
+        )
 
     @staticmethod
     def _build_running_summary() -> dict[str, str]:
@@ -553,10 +729,21 @@ class DemoTaskService:
         }
 
     @staticmethod
-    def _build_partial_failure_summary(*, finding_count: int, failed_status: str) -> dict[str, str]:
-        reason = "超时" if failed_status == "timeout" else "失败"
+    def _build_partial_failure_summary(
+        *,
+        confirmed_count: int,
+        candidate_count: int,
+        failed_status: str,
+    ) -> dict[str, str]:
+        reason = {
+            "timeout": "超时",
+            "convergence": "检测到后续空转",
+        }.get(failed_status, "失败")
         return {
-            "executive_summary": f"执行摘要：本次真实扫描{reason}，但已保留 {finding_count} 个已发现漏洞进入当前报告。",
+            "executive_summary": (
+                f"执行摘要：本次真实扫描{reason}，但已保留 {confirmed_count} 个已确认漏洞和 "
+                f"{candidate_count} 个候选风险进入当前报告。"
+            ),
             "technical_analysis": "Strix 未完整收敛到最终总结，但运行目录中已落盘的漏洞证据已被平台即时吸收并保留下来。",
             "recommendations": "可直接查看并导出当前部分报告；如需更完整结论，建议延长扫描时长或缩小目标范围后重试。",
         }
@@ -589,6 +776,13 @@ class DemoApiRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/preflight":
             target = query.get("target", [""])[0]
             self._send_json(HTTPStatus.OK, self.task_service.get_preflight(target))
+            return
+
+        if parsed.path == "/api/vulnerability-knowledge/status":
+            self._send_json(
+                HTTPStatus.OK,
+                self.task_service.get_vulnerability_knowledge_status(),
+            )
             return
 
         if parsed.path.startswith("/api/tasks/"):
@@ -716,6 +910,7 @@ def create_demo_server(
     strix_scan_waiter=None,
     strix_scan_canceller=None,
     preflight_runner=None,
+    vulnerability_knowledge_service=None,
     real_scan_timeout_seconds: int = 300,
 ) -> ThreadingHTTPServer:
     task_service = DemoTaskService(
@@ -726,6 +921,7 @@ def create_demo_server(
         strix_scan_waiter=strix_scan_waiter,
         strix_scan_canceller=strix_scan_canceller,
         preflight_runner=preflight_runner,
+        vulnerability_knowledge_service=vulnerability_knowledge_service,
         real_scan_timeout_seconds=real_scan_timeout_seconds,
     )
     handler = partial(
@@ -738,11 +934,15 @@ def create_demo_server(
 
 def main() -> None:
     project_root = Path(__file__).resolve().parents[3]
+    vulnerability_knowledge_service = VulnerabilityKnowledgeService(
+        cache_dir=project_root / "tmp" / "vulnerability_knowledge",
+    )
     server = create_demo_server(
         frontend_dir=project_root / "src" / "frontend",
         fixture_path=project_root / "tests" / "fixtures" / "strix_findings_sample.json",
         strix_runs_root=project_root / "strix_runs",
         template_path=project_root / "assets" / "report_template.docx",
+        vulnerability_knowledge_service=vulnerability_knowledge_service,
     )
     try:
         print("演示服务已启动：http://127.0.0.1:8000")

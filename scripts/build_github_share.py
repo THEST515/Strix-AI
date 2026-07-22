@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import stat
 from pathlib import Path
 
 
@@ -37,8 +38,18 @@ DIRECTORIES_TO_EXCLUDE = {
     ".docx_render_probe",
     ".run",
     ".superpowers",
+    "acceptance",
+    "demo",
     "dist",
+    "handover",
+    "ppt-master-projects",
+    "presentation",
+    "presentation-visual-references",
+    "reports",
     "strix_runs",
+    "superpowers",
+    "team-division",
+    "tmp",
     "__pycache__",
 }
 
@@ -53,9 +64,14 @@ def _ignore(_directory: str, names: list[str]) -> set[str]:
     return ignored
 
 
+def _remove_readonly(function, path: str, _exc_info) -> None:
+    Path(path).chmod(stat.S_IWRITE)
+    function(path)
+
+
 def build_share_copy() -> Path:
     if OUTPUT_ROOT.exists():
-        shutil.rmtree(OUTPUT_ROOT)
+        shutil.rmtree(OUTPUT_ROOT, onerror=_remove_readonly)
 
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -75,8 +91,15 @@ def build_share_copy() -> Path:
                 "__pycache__/",
                 "*.pyc",
                 ".DS_Store",
+                ".env",
+                ".env.*",
+                "!.env.example",
+                "cli-config.json",
                 "dist/",
+                "*.inspect.ndjson",
+                "ppt-master-projects/",
                 "strix_runs/",
+                "tmp/",
             ]
         )
         + "\n",

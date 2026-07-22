@@ -70,13 +70,10 @@
               </label>
             </div>
 
-            <label>
-              <span>扫描时长</span>
-              <select id="task-timeout" name="scanTimeoutSeconds">
-                <option value="180">3 分钟</option>
-                <option value="300" selected>5 分钟</option>
-                <option value="600">10 分钟</option>
-              </select>
+            <label class="range-field">
+              <span>扫描时长 <output id="task-timeout-value" for="task-timeout">5 分钟</output></span>
+              <input id="task-timeout" name="scanTimeoutMinutes" type="range" min="3" max="31" value="5" step="1" />
+              <small>3 分钟 · 5 分钟 · 10 分钟 · 30 分钟；滑到最右侧为无限时长，直到手动停止</small>
             </label>
 
             <div id="preflight-status" class="preflight-status" hidden aria-live="polite"></div>

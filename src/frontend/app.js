@@ -24,6 +24,7 @@ const state = {
   isRunPending: false,
   runtime: null,
   runtimePollHandle: null,
+  elapsedTickHandle: null,
   preflight: { state: "idle", target: null, result: null },
   preflightRequestId: 0,
 };
@@ -49,7 +50,38 @@ const elements = {
   cancelButton: document.querySelector("#cancel-task"),
   exportButton: document.querySelector("#export-report"),
   exportKind: document.querySelector("#export-kind"),
+  timeoutInput: document.querySelector("#task-timeout"),
+  timeoutValue: document.querySelector("#task-timeout-value"),
 };
+
+function formatElapsedScanTime(startedAt, completedAt = null, now = Date.now()) {
+  if (!startedAt) {
+    return "-";
+  }
+
+  const start = Date.parse(startedAt);
+  const end = completedAt ? Date.parse(completedAt) : now;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return "-";
+  }
+
+  const elapsedSeconds = Math.max(0, Math.floor((end - start) / 1000));
+  const hours = Math.floor(elapsedSeconds / 3600);
+  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+  const seconds = elapsedSeconds % 60;
+  return hours > 0
+    ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+    : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function updateTimeoutLabel() {
+  if (!elements.timeoutInput || !elements.timeoutValue) {
+    return;
+  }
+
+  const minutes = Number(elements.timeoutInput.value);
+  elements.timeoutValue.textContent = minutes === 31 ? "无限时长" : `${minutes} 分钟`;
+}
 
 async function requestJson(path, options = {}) {
   if (!apiBaseUrl) {
@@ -77,7 +109,10 @@ async function createTaskViaApi(formData) {
     name: String(formData.get("taskName") ?? "").trim(),
     target: String(formData.get("target") ?? "").trim(),
     scanMode: String(formData.get("scanMode") ?? "quick"),
-    scanTimeoutSeconds: Number(String(formData.get("scanTimeoutSeconds") ?? "300")),
+    scanTimeoutSeconds: (() => {
+      const timeoutMinutes = Number(String(formData.get("scanTimeoutMinutes") ?? "5"));
+      return timeoutMinutes === 31 ? null : timeoutMinutes * 60;
+    })(),
     resultSource: String(formData.get("resultSource") ?? "fixture"),
     instruction: String(formData.get("instruction") ?? "").trim(),
   };
@@ -305,9 +340,11 @@ function failureClassificationLabel(value) {
 function convergenceStatusLabel(value) {
   const mapping = {
     validated_findings: "已形成可验证漏洞证据",
+    validated_with_idle: "已形成漏洞证据，但后续出现空转",
     completed_without_findings: "扫描完成，但未发现漏洞",
     no_surface_found: "尚未识别到有效攻击面",
     surface_found_but_unverified: "已发现攻击面，但尚未形成可验证漏洞",
+    candidate_evidence: "已保留候选证据，等待正式复现确认",
     recon_in_progress: "仍处于侦察阶段，正在继续摸底",
     not_started: "尚未启动真实扫描",
   };
@@ -428,6 +465,7 @@ function buildRuntimePresentation(task) {
       pending: "已创建，等待启动",
       running: "真实扫描执行中",
       completed: "真实扫描已完成",
+      partial: "真实扫描已保留部分结果",
       failed: "真实扫描执行失败",
       cancelled: "真实扫描已终止",
       unavailable: "运行信息不可用",
@@ -461,6 +499,18 @@ function buildRuntimePresentation(task) {
       emptyState: {
         emptyTitle: "真实扫描执行中",
         emptyBody: "结构化运行态正在刷新中，请稍后查看阶段、攻击面和收敛诊断。",
+      },
+    };
+  }
+
+  if (task.status === "partial") {
+    return {
+      status: "真实扫描已保留部分结果",
+      log: "本次扫描未正常收口，但已有候选或正式证据可供复核和导出。",
+      runtime: null,
+      emptyState: {
+        emptyTitle: "部分结果已保留",
+        emptyBody: "请优先复核待验证证据；候选风险不会计入已确认漏洞数量。",
       },
     };
   }
@@ -548,6 +598,10 @@ async function refreshRuntime(task) {
       taskId: task.taskId,
       ...normalizeRuntimePayload(payload.runtime),
     };
+    state.runtime.elapsedTimeText = formatElapsedScanTime(
+      state.runtime.startedAt ?? task.startedAt,
+      state.runtime.completedAt,
+    );
 
     if (payload.runtime.phase === "running") {
       const refreshedTask = await refreshTaskResults(task);
@@ -562,7 +616,7 @@ async function refreshRuntime(task) {
 
     renderRuntime(task);
 
-    if (["completed", "failed", "cancelled"].includes(payload.runtime.phase)) {
+    if (["completed", "partial", "failed", "cancelled"].includes(payload.runtime.phase)) {
       stopRuntimePolling();
       await refreshTaskResults(task);
       if (state.activeTaskId !== task.taskId) {
@@ -611,6 +665,10 @@ async function refreshRuntime(task) {
 
 function syncRuntimePolling(task) {
   stopRuntimePolling();
+  if (state.elapsedTickHandle !== null) {
+    window.clearInterval(state.elapsedTickHandle);
+    state.elapsedTickHandle = null;
+  }
 
   if (!task) {
     state.runtime = null;
@@ -625,6 +683,25 @@ function syncRuntimePolling(task) {
   }
 
   void refreshRuntime(task);
+
+  if (task.status === "running" || state.isRunPending) {
+    state.elapsedTickHandle = window.setInterval(() => {
+      const activeTask = state.tasks.find((item) => item.taskId === state.activeTaskId);
+      if (!activeTask || activeTask.taskId !== task.taskId || activeTask.status !== "running") {
+        window.clearInterval(state.elapsedTickHandle);
+        state.elapsedTickHandle = null;
+        return;
+      }
+
+      if (state.runtime?.taskId === task.taskId) {
+        state.runtime.elapsedTimeText = formatElapsedScanTime(
+          state.runtime.startedAt ?? activeTask.startedAt,
+          state.runtime.completedAt,
+        );
+        renderRuntime(activeTask);
+      }
+    }, 1000);
+  }
 
   if (task.status === "created" || task.status === "running" || state.isRunPending) {
     state.runtimePollHandle = window.setInterval(() => {
@@ -698,6 +775,7 @@ elements.form.addEventListener("submit", async (event) => {
       ? `已创建任务 ${task.taskId}。`
       : `已创建本地演示任务 ${task.taskId}。`;
     elements.form.reset();
+    updateTimeoutLabel();
     renderAll();
   } catch (error) {
     const task = buildDemoTask(formData, state.tasks.length);
@@ -705,6 +783,7 @@ elements.form.addEventListener("submit", async (event) => {
     state.activeTaskId = task.taskId;
     elements.feedback.textContent = `后端暂不可用，已回退到本地演示样例模式：${error.message}`;
     elements.form.reset();
+    updateTimeoutLabel();
     renderAll();
   }
 });
@@ -712,6 +791,8 @@ elements.form.addEventListener("submit", async (event) => {
 elements.resultSource.addEventListener("change", () => {
   void refreshPreflight(elements.targetInput.value);
 });
+
+elements.timeoutInput?.addEventListener("input", updateTimeoutLabel);
 
 elements.targetInput.addEventListener("blur", () => {
   void refreshPreflight(elements.targetInput.value);
@@ -820,6 +901,7 @@ elements.exportButton.addEventListener("click", async () => {
   }
 });
 
+updateTimeoutLabel();
 renderAll();
 
 if (apiBaseUrl) {
